@@ -1,0 +1,85 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "fullName": { "type": "string" },
+        "role": { "type": "string", "enum": ["client", "worker", "admin"] },
+        "email": { "type": "string" },
+        "category": { "type": "string" },
+        "bairro": { "type": "string" },
+        "verified": { "type": "boolean" },
+        "level": { "type": "number" },
+        "jobs": { "type": "number" },
+        "phone": { "type": "string" },
+        "photo": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "fullName", "role", "email"]
+    },
+    "Job": {
+      "title": "Job Request",
+      "description": "A job request created by a client",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "providerId": { "type": "string" },
+        "clientId": { "type": "string" },
+        "category": { "type": "string" },
+        "amount": { "type": "number" },
+        "description": { "type": "string" },
+        "status": { "type": "string" },
+        "transactionId": { "type": "string" },
+        "photoBefore": { "type": "string" },
+        "photoAfter": { "type": "string" },
+        "panicAlert": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clientId", "category", "amount", "status", "createdAt"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A chat message",
+      "type": "object",
+      "properties": {
+        "senderId": { "type": "string" },
+        "senderRole": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Review": {
+      "title": "Review",
+      "description": "A review for a provider",
+      "type": "object",
+      "properties": {
+         "rating": { "type": "number" },
+         "comment": { "type": "string" },
+         "authorId": { "type": "string" },
+         "date": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "Public and private user profile data"
+    },
+    "jobs/{jobId}": {
+      "schema": "Job",
+      "description": "Job details and status"
+    },
+    "jobs/{jobId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Messages within a job's chat"
+    },
+    "users/{userId}/reviews/{reviewId}": {
+      "schema": "Review",
+      "description": "Reviews received by a worker"
+    }
+  }
+}

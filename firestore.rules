@@ -1,0 +1,100 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // --- Global Safety Net ---
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isEmailVerified() {
+      return request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isAdmin() {
+      // In a real app, check a trusted /admins collection or custom claims
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // --- User Validation ---
+    function isValidUser(data) {
+      return data.uid == request.auth.uid &&
+             data.fullName is string && data.fullName.size() <= 100 &&
+             data.email == request.auth.token.email &&
+             data.role in ['client', 'worker', 'admin'] &&
+             (data.get('category', null) == null || (data.category is string && data.category.size() <= 50)) &&
+             (data.get('phone', null) == null || (data.phone is string && data.phone.size() <= 20));
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isAdmin();
+      allow create: if isOwner(userId) && isEmailVerified() && isValidUser(incoming()) && incoming().role != 'admin';
+      allow update: if isOwner(userId) && isValidUser(incoming()) && 
+                    incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'category', 'bairro', 'phone', 'photo', 'level', 'jobs', 'verified']) &&
+                    // Only Admin can verify
+                    (incoming().verified == existing().verified || isAdmin());
+      
+      match /reviews/{reviewId} {
+        allow read: if true;
+        allow create: if isSignedIn() && isEmailVerified() && incoming().authorId == request.auth.uid;
+      }
+    }
+
+    // --- Job Validation ---
+    function isValidJob(data) {
+      return data.clientId == request.auth.uid &&
+             data.category is string &&
+             data.amount is number && data.amount > 0 &&
+             data.status in ['AGUARDANDO_DEPOSITO', 'VALIDACAO_PENDENTE', 'PAGO', 'EM_CURSO', 'FINALIZADO', 'CONCLUIDO'] &&
+             data.createdAt == request.time;
+    }
+
+    match /jobs/{jobId} {
+      allow get: if isSignedIn() && (resource.data.clientId == request.auth.uid || resource.data.providerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.clientId == request.auth.uid || resource.data.providerId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && isEmailVerified() && isValidJob(incoming());
+      allow update: if isSignedIn() && (
+        // Client actions
+        (existing().clientId == request.auth.uid && (
+          (incoming().status == 'VALIDACAO_PENDENTE' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'transactionId', 'updatedAt'])) ||
+          (incoming().status == 'CONCLUIDO' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+        )) ||
+        // Worker actions
+        (existing().providerId == request.auth.uid && (
+          (incoming().status == 'EM_CURSO' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'photoBefore', 'updatedAt'])) ||
+          (incoming().status == 'FINALIZADO' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'photoAfter', 'updatedAt'])) ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['panicAlert', 'updatedAt']))
+        )) ||
+        // Admin actions
+        (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+      ) && incoming().updatedAt == request.time;
+
+      match /messages/{messageId} {
+        allow read: if isSignedIn() && (get(/databases/$(database)/documents/jobs/$(jobId)).data.clientId == request.auth.uid || get(/databases/$(database)/documents/jobs/$(jobId)).data.providerId == request.auth.uid);
+        allow create: if isSignedIn() && incoming().senderId == request.auth.uid && incoming().createdAt == request.time;
+      }
+    }
+  }
+}

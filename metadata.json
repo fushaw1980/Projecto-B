@@ -1,0 +1,13 @@
+{
+  "name": "Biscate Directo",
+  "description": "Plataforma de conexão para prestadores de serviços informais em Moçambique (Maputo, Matola, Beira). Foco em rapidez, confiança e baixa latência.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ],
+  "majorCapabilities": [
+    "Service Directory",
+    "M-Pesa Integration",
+    "Offline Support"
+  ]
+}
