@@ -3,11 +3,43 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Biscate Directo - Moçambique</title>
+    <title>Mozbiscates</title>
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#FF4D00" />
+    <link rel="apple-touch-icon" href="https://img.icons8.com/3d-fluency/512/wrench.png" />
+    
+    <!-- SEO & Social Media -->
+    <meta name="description" content="Encontre profissionais qualificados em Moçambique com Mozbiscates." />
+    <meta property="og:title" content="Mozbiscates" />
+    <meta property="og:description" content="A plataforma mais rápida para encontrar serviços em Moçambique." />
+    <meta property="og:image" content="https://img.icons8.com/3d-fluency/512/wrench.png" />
+    <meta property="og:type" content="website" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Mozbiscates" />
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      window.deferredPrompt = null;
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        window.deferredPrompt = e;
+        // Dispatch custom event to notify React
+        window.dispatchEvent(new CustomEvent('pwa-prompt-available', { detail: e }));
+      });
+
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').then(reg => {
+            console.log('SW registered:', reg);
+          }).catch(err => {
+            console.log('SW registration failed:', err);
+          });
+        });
+      }
+    </script>
   </body>
 </html>
 

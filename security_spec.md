@@ -1,4 +1,4 @@
-# Security Specification for Biscate Directo
+# Security Specification for Mozbiscates
 
 ## Data Invariants
 - A User profile must match the `request.auth.uid`.

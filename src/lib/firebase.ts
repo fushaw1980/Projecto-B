@@ -1,19 +1,25 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import { initializeFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const db = initializeFirestore(app, {
+  experimentalForceLongPolling: true,
+}, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 
-async function testConnection() {
+// Connectivity check with detailed logging
+async function checkFirestoreConnection() {
   try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if(error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration.");
+    const testDoc = doc(db, '_connection_test_', 'ping');
+    await getDocFromServer(testDoc);
+    console.log("✅ Firestore connected successfully");
+  } catch (error: any) {
+    console.warn("⚠️ Firestore connection notice:", error.message);
+    if (error.code === 'unavailable') {
+      console.error("Critical: Firestore is currently unreachable. Retrying in background...");
     }
   }
 }
-testConnection();
+checkFirestoreConnection();

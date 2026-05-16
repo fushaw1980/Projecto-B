@@ -1,13 +1,15 @@
 {
-  "name": "Biscate Directo",
-  "description": "Plataforma de conexão para prestadores de serviços informais em Moçambique (Maputo, Matola, Beira). Foco em rapidez, confiança e baixa latência.",
+  "name": "Mozbiscates",
+  "description": "Plataforma de conexão para prestadores de serviços em Moçambique. Agora com mapas interativos (Leaflet) para localização exata e conexão em tempo real.",
   "requestFramePermissions": [
     "microphone",
-    "camera"
+    "camera",
+    "geolocation"
   ],
   "majorCapabilities": [
     "Service Directory",
     "M-Pesa Integration",
-    "Offline Support"
+    "Offline Support (PWA)",
+    "Interactive Maps (Leaflet)"
   ]
 }

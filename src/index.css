@@ -14,15 +14,48 @@
   --color-natural-accent: #E65100;
   --color-natural-success: #1B5E20;
 
-  --shadow-premium: 0 10px 30px -5px rgba(26, 23, 21, 0.04), 0 4px 12px -2px rgba(26, 23, 21, 0.02);
-  --shadow-accent-glow: 0 20px 40px -10px rgba(230, 81, 0, 0.25);
+  --shadow-premium: 0 10px 40px -10px rgba(26, 23, 21, 0.08), 0 4px 12px -2px rgba(26, 23, 21, 0.03);
+  --shadow-accent-glow: 0 15px 35px -10px rgba(230, 81, 0, 0.3);
+  --shadow-inner-glow: inset 0 2px 4px 0 rgba(255, 255, 255, 0.5);
 }
 
 @layer base {
   body {
     @apply antialiased text-natural-ink bg-natural-bg selection:bg-natural-accent selection:text-white;
     -webkit-tap-highlight-color: transparent;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
+  .premium-popup .leaflet-popup-content-wrapper {
+    @apply rounded-[1.5rem] border-none shadow-premium p-0 overflow-hidden bg-white/95 backdrop-blur-md;
+  }
+  .premium-popup .leaflet-popup-content {
+    @apply m-0;
+  }
+  .premium-popup .leaflet-popup-tip {
+    @apply bg-white/95;
+  }
+}
+
+.leaflet-container {
+  filter: grayscale(0.1) contrast(1.05);
+  background: #f8f7f4 !important;
+}
+
+.leaflet-bar {
+  border: none !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1) !important;
+  overflow: hidden;
+  border-radius: 12px !important;
+}
+
+.leaflet-bar a {
+  background: white !important;
+  color: #1A1715 !important;
+  border-bottom: 1px solid #E8E2DE !important;
+}
+
+.leaflet-marker-icon {
+  filter: drop-shadow(0 4px 6px rgba(0,0,0,0.15));
 }
 
 .no-scrollbar::-webkit-scrollbar {

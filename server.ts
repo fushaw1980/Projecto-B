@@ -8,7 +8,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-console.log("--- BISCATE DIRECTO STARTUP ---");
+console.log("--- MOZBISCATES STARTUP ---");
 console.log("NODE_ENV:", process.env.NODE_ENV);
 console.log("CWD:", process.cwd());
 console.log("DIRNAME:", __dirname);
@@ -127,6 +127,11 @@ async function startServer() {
     { id: 2, name: "Isabel Sitoe", category: "Canalizadora", bairro: "Malhangalene", rating: 4.5, verified: true, level: 2, jobs: 89, phone: "840000002", balance: 8200, photo: "https://picsum.photos/seed/2/200/200", portfolio: [] },
     { id: 3, name: "Zacarias Langa", category: "Pedreiro", bairro: "Zimpeto", rating: 4.2, verified: false, level: 1, jobs: 45, phone: "840000003", balance: 0, photo: "https://picsum.photos/seed/3/200/200", portfolio: [] },
     { id: 5, name: "Mussagi Juma", category: "Serviços Gerais", bairro: "Mafalala", rating: 4.6, verified: true, level: 2, jobs: 34, phone: "840000005", balance: 4500, photo: "https://picsum.photos/seed/5/200/200", portfolio: [] },
+    { id: 6, name: "Samuel Chichorro", category: "Segurança / Guarda", bairro: "Sommerschield", rating: 4.9, verified: true, level: 3, jobs: 156, phone: "840000006", balance: 22000, photo: "https://picsum.photos/seed/6/200/200", portfolio: [] },
+    { id: 7, name: "Beatriz Mondlane", category: "Alfaiate / Costureira", bairro: "Alto Maé", rating: 4.7, verified: true, level: 2, jobs: 67, phone: "840000007", balance: 12000, photo: "https://picsum.photos/seed/7/200/200", portfolio: [] },
+    { id: 8, name: "João Matsinhe", category: "Técnico de AC / Frio", bairro: "Matola Cidade", rating: 4.8, verified: true, level: 3, jobs: 210, phone: "840000008", balance: 35000, photo: "https://picsum.photos/seed/8/200/200", portfolio: [] },
+    { id: 9, name: "Lucas Bila", category: "Marceneiro / Carpinteiro", bairro: "Chamanculo", rating: 4.4, verified: true, level: 2, jobs: 42, phone: "840000009", balance: 5000, photo: "https://picsum.photos/seed/9/200/200", portfolio: [] },
+    { id: 10, name: "Filomena Tembe", category: "Diarista / Doméstica", bairro: "Triunfo", rating: 4.9, verified: true, level: 3, jobs: 312, phone: "840000010", balance: 18000, photo: "https://picsum.photos/seed/10/200/200", portfolio: [] },
   ];
 
   // API: Chat
@@ -270,37 +275,19 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    // Determine dist path robustly
     const distPath = path.resolve(process.cwd(), 'dist');
-    console.log(`[PROD] Attempting to serve from: ${distPath}`);
+    console.log(`[PROD] Serving static files from: ${distPath}`);
     
-    if (!fs.existsSync(distPath)) {
-      console.error(`CRITICAL: dist directory NOT FOUND at ${distPath}`);
-    }
+    // Serve static files
+    app.use(express.static(distPath));
 
-    // Serve static files with long-term caching for assets
-    app.use(express.static(distPath, {
-      maxAge: '1d',
-      index: false // we handle root explicitly
-    }));
-
-    // Explicitly handle root/index
-    app.get(["/", "/index.html"], (req, res) => {
-      const indexPath = path.join(distPath, 'index.html');
-      if (fs.existsSync(indexPath)) {
-        res.sendFile(indexPath);
-      } else {
-        res.status(404).send("Error: dist/index.html not found. Please run 'npm run build'.");
-      }
-    });
-
-    // SPA fallback
+    // SPA Fallback for any other route
     app.get('*', (req, res) => {
       const indexPath = path.join(distPath, 'index.html');
       if (fs.existsSync(indexPath)) {
         res.sendFile(indexPath);
       } else {
-        res.status(404).send("Error: Page not found and fallback failed.");
+        res.status(404).send("Application not built. Please run 'npm run build'.");
       }
     });
   }
