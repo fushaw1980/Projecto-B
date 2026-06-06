@@ -10,6 +10,7 @@
     "Service Directory",
     "M-Pesa Integration",
     "Offline Support (PWA)",
-    "Interactive Maps (Leaflet)"
+    "Interactive Maps (Leaflet)",
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]
 }

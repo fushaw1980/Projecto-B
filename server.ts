@@ -4,14 +4,11 @@ import { fileURLToPath } from "url";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import "dotenv/config";
 
 console.log("--- MOZBISCATES STARTUP ---");
 console.log("NODE_ENV:", process.env.NODE_ENV);
 console.log("CWD:", process.cwd());
-console.log("DIRNAME:", __dirname);
 
 async function startServer() {
   const app = express();
@@ -34,12 +31,11 @@ async function startServer() {
   });
 
   app.get("/api/debug", (req, res) => {
-    const distPath = path.resolve(__dirname, 'dist');
+    const distPath = path.resolve(process.cwd(), 'dist');
     const distExists = fs.existsSync(distPath);
     res.json({
       env: process.env.NODE_ENV,
       cwd: process.cwd(),
-      dirname: __dirname,
       distPath,
       distExists,
       distFiles: distExists ? fs.readdirSync(distPath) : []

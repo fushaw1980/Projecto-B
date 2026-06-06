@@ -50,8 +50,7 @@ import {
   Tv,
   Palette,
   Bell,
-  AlarmClock,
-  Share2
+  AlarmClock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -656,6 +655,9 @@ const translations = {
     whatsappLine: "Linha Mozbiscates",
     whatsappDesc: "Fale com o Moderador para validar o seu depósito manualmente.",
     talkWhatsapp: "Falar no WhatsApp",
+    customerLine: "Linha do Cliente (*777#)",
+    customerLineDesc: "Disque o código interativo *777# para o apoio dinâmico ao cliente e serviços rápidos do Garante.",
+    dialCustomerLine: "Discar *777#",
     whyUse: "Porquê usar o Garante?",
     why1: "O seu dinheiro não vai para o trabalhador antes do serviço estar pronto.",
     why2: "Fotos do Antes e Depois provam o trabalho realizado.",
@@ -830,6 +832,9 @@ const translations = {
     whatsappLine: "Mozbiscates Line",
     whatsappDesc: "Talk with the Moderator to validate your deposit manually.",
     talkWhatsapp: "Talk on WhatsApp",
+    customerLine: "Customer Line (*777#)",
+    customerLineDesc: "Dial the interactive *777# code for dynamic support, quick verification, or emergency help.",
+    dialCustomerLine: "Dial *777#",
     whyUse: "Why use Garante?",
     why1: "Your money doesn't go to the worker before the service is ready.",
     why2: "Before and After photos prove the work performed.",
@@ -1004,6 +1009,9 @@ const translations = {
     whatsappLine: "WhatsApp Mozbiscates",
     whatsappDesc: "Olavule ni Moderator wi osuwelie musurukhu anyu.",
     talkWhatsapp: "Olavule ni WhatsApp",
+    customerLine: "Linha do Cliente (*777#)",
+    customerLineDesc: "Nikhavelo wa Cliente ni ecode *777# wi othelele ophwanya nikhaveliherro na mpuwa.",
+    dialCustomerLine: "Oramela *777#",
     whyUse: "Exeeni ephariwa muteko Garante?",
     why1: "Musurukhu anyu khonvahiwa namuteko muteko ohipakiwe.",
     why2: "Efoto ya Ohipacerya ni ya Omalihera sinnasuweliwa muteko.",
@@ -2287,6 +2295,102 @@ function MainApp() {
   const [showAutoPrompt, setShowAutoPrompt] = useState(false);
   const [notifPermission, setNotifPermission] = useState('default');
 
+  // --- USSD Client Line Simulator State & Helpers ---
+  const [ussdOpen, setUssdOpen] = useState(false);
+  const [ussdScreen, setUssdScreen] = useState<'main' | 'how_it_works' | 'rules' | 'sos' | 'balance_check'>('main');
+  const [ussdInput, setUssdInput] = useState('');
+  const [ussdError, setUssdError] = useState('');
+
+  const getUssdContent = () => {
+    if (lang === 'en') {
+      if (ussdScreen === 'main') {
+        return "Mozbiscates - Customer Support\nSelect an option:\n1. Direct Support (WhatsApp)\n2. How does payment escrow work?\n3. Community Rules & Safety\n4. Request Emergency SOS\n5. My Wallet / Balance";
+      }
+      if (ussdScreen === 'how_it_works') {
+        return "[How it Works]\nFunds remain in escrow. We release them to the worker only when you confirm completion.\n\n9. Back";
+      }
+      if (ussdScreen === 'rules') {
+        return "[Rules & Safety]\n1. Never pay outside the app.\n2. Always check-in/out with photos.\n3. Keep respect mutual.\n\n9. Back";
+      }
+      if (ussdScreen === 'sos') {
+        return "[SOS & Urgent Help]\nSecurity alert sent! Our team will contact you shortly to provide guidance.\n\n9. Back";
+      }
+      if (ussdScreen === 'balance_check') {
+        return `[Wallet & Balance]\nYour current balance: ${balance} MT\nAll funds are safeguarded by Mozbiscates.\n\n9. Back`;
+      }
+    } else if (lang === 'em') {
+      if (ussdScreen === 'main') {
+        return "Mozbiscates - Nikhavelo wa Cliente\nThanla nttina:\n1. WhatsApp Line (Moderator)\n2. Exeeni eniopoliwa musurukhu?\n3. Malamulo a Comunidade\n4. SOS wala Nikhavelo vooluluha\n5. Carteira anyu ni musurukhu";
+      }
+      if (ussdScreen === 'how_it_works') {
+        return "[Exiphika ya Garante]\nMusurukhu onnahisireya ni Garante ni onvahiwa namuteko muteko omalihiwa.\n\n9. Othela";
+      }
+      if (ussdScreen === 'rules') {
+        return "[Malamulo a Communidade]\n1. Ohelihe waatepa ohivahiwa musurukhu.\n2. Okahe check-in ni check-out ni foto.\n3. Okhalane nlema.\n\n9. Othela";
+      }
+      if (ussdScreen === 'sos') {
+        return "[SOS vooluluha]\nNikhavelo na SOS nnahasiriwa! Moderator onnowiirelani pashini.\n\n9. Othela";
+      }
+      if (ussdScreen === 'balance_check') {
+        return `[Carteira ni Musurukhu]\nMusurukhu anyu: ${balance} MT\nSinasuwelihiwa mpuwa mwa Mozbiscates.\n\n9. Othela`;
+      }
+    } else { // 'pt'
+      if (ussdScreen === 'main') {
+        return "Mozbiscates - Linha do Cliente\nEscolha uma opção:\n1. Linha Directa (WhatsApp)\n2. Como funciona o Garante?\n3. Recomendações e Regras\n4. Solicitar Ajudo / SOS urgente\n5. Consultar Carteira / Saldo";
+      }
+      if (ussdScreen === 'how_it_works') {
+        return "[Como Funciona]\nO dinheiro fica seguro em conta de custódia do Garante e só é liberado ao trabalhador após validação do serviço.\n\n9. Voltar";
+      }
+      if (ussdScreen === 'rules') {
+        return "[Regras e Segurança]\n1. Nunca pague por fora da app.\n2. Faça sempre Check-in e Check-out com fotos.\n3. Trate a todos com respeito.\n\n9. Voltar";
+      }
+      if (ussdScreen === 'sos') {
+        return "[SOS & Apoio Urgente]\nAlerta enviado ao centro de monitoria! O nosso moderador entrará em contacto com apoio imediato.\n\n9. Voltar";
+      }
+      if (ussdScreen === 'balance_check') {
+        return `[Carteira & Saldo]\nO seu saldo actual: ${balance} MT\nTodos os fundos estão protegidos por Mozbiscates.\n\n9. Voltar`;
+      }
+    }
+    return '';
+  };
+
+  const handleUssdSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setUssdError('');
+    const choice = ussdInput.trim();
+    if (ussdScreen === 'main') {
+      if (choice === '1') {
+        window.open('https://wa.me/258870324189', '_blank');
+        setUssdOpen(false);
+      } else if (choice === '2') {
+        setUssdScreen('how_it_works');
+        setUssdInput('');
+      } else if (choice === '3') {
+        setUssdScreen('rules');
+        setUssdInput('');
+      } else if (choice === '4') {
+        setUssdScreen('sos');
+        setUssdInput('');
+        setNotification({
+          title: "🚨 SOS activado via *777#",
+          body: "O seu sinal de emergência foi enviado ao moderador."
+        });
+      } else if (choice === '5') {
+        setUssdScreen('balance_check');
+        setUssdInput('');
+      } else {
+        setUssdError(lang === 'en' ? 'Invalid option. Select 1-5.' : lang === 'em' ? 'Option ehikhale yoovala.' : 'Opção inválida. Escolha entre 1 e 5.');
+      }
+    } else {
+      if (choice === '9' || choice === '0') {
+        setUssdScreen('main');
+        setUssdInput('');
+      } else {
+        setUssdError(lang === 'en' ? "Invalid option. Enter '9' to go back." : lang === 'em' ? "Option ehikhale. Oreva '9' wi othele." : "Opção inválida. Introduza '9' para voltar.");
+      }
+    }
+  };
+
   useEffect(() => {
     // Detect standalone mode
     const checkIsInstalled = () => {
@@ -2921,6 +3025,71 @@ function MainApp() {
             </motion.div>
           )}
 
+          {ussdOpen && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6 select-none animate-in fade-in duration-200">
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className="bg-[#F4F4F4] text-black w-full max-w-sm rounded-[2.5rem] shadow-[0_25px_60px_-15px_rgba(0,0,0,0.4)] border border-neutral-300 overflow-hidden font-sans text-left"
+              >
+                <form onSubmit={handleUssdSubmit} className="p-6">
+                  <div className="text-[10px] font-black text-neutral-500 mb-2 tracking-[0.2em] uppercase flex items-center gap-1.5 opacity-80">
+                    <Smartphone className="w-3.5 h-3.5 text-natural-accent" />
+                    <span>{lang === 'en' ? 'USSD MESSAGE' : lang === 'em' ? 'USSD' : 'MENSAGEM USSD'}</span>
+                  </div>
+                  
+                  <div className="bg-white p-5 rounded-2xl border border-neutral-200 shadow-inner mb-4 min-h-[140px] flex flex-col justify-between">
+                    <div className="text-xs font-mono whitespace-pre-line text-neutral-800 tracking-tight leading-relaxed">
+                      {getUssdContent()}
+                    </div>
+                    {ussdError && (
+                      <div className="text-red-600 text-[10px] font-black uppercase tracking-wide mt-2">
+                        {ussdError}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="relative mb-5">
+                    <input 
+                      type="text" 
+                      pattern="[0-9]*"
+                      inputMode="numeric"
+                      value={ussdInput}
+                      onChange={(e) => {
+                        setUssdInput(e.target.value);
+                        setUssdError('');
+                      }}
+                      placeholder={lang === 'en' ? 'Type option here...' : lang === 'em' ? 'Option...' : 'Insira a opção aqui...'}
+                      className="w-full bg-white border border-neutral-300 py-3.5 px-4 rounded-xl text-xs font-mono text-neutral-850 focus:outline-none focus:border-natural-accent focus:ring-2 focus:ring-natural-accent/10 transition-all font-bold placeholder-neutral-400"
+                      autoFocus
+                    />
+                  </div>
+
+                  <div className="flex justify-end gap-3 text-xs font-black tracking-widest">
+                    <button 
+                      type="button"
+                      onClick={() => {
+                        setUssdOpen(false);
+                        setUssdInput('');
+                        setUssdError('');
+                      }}
+                      className="px-5 py-3 text-neutral-500 hover:text-neutral-800 transition-colors uppercase"
+                    >
+                      {lang === 'en' ? 'Cancel' : lang === 'em' ? 'Ohiya' : 'Cancelar'}
+                    </button>
+                    <button 
+                      type="submit"
+                      className="px-6 py-3 bg-natural-accent hover:bg-natural-accent/90 text-white rounded-xl transition-colors shadow-md hover:shadow-lg active:scale-95 uppercase"
+                    >
+                      {lang === 'en' ? 'Send' : lang === 'em' ? 'Oveha' : 'Enviar'}
+                    </button>
+                  </div>
+                </form>
+              </motion.div>
+            </div>
+          )}
+
           {notification && (
             <motion.div 
               initial={{ y: -100, opacity: 0 }}
@@ -3259,8 +3428,8 @@ function MainApp() {
                    <div className="w-24 h-24 bg-natural-accent/10 rounded-full flex items-center justify-center mx-auto mb-6"><Heart className="w-12 h-12 text-natural-accent fill-natural-accent/20" /></div>
                    <h2 className="text-4xl font-black text-natural-heading tracking-tighter mb-2 italic">{(String(t.helpTitle || '')).split(' ').map((w: string, i: number) => (w === 'Utilizador' || w === 'Support' || w === 'Anikhwe') ? <span key={i} className="text-natural-accent">{w} </span> : <Fragment key={i}>{w} </Fragment>)}</h2>
                    <p className="text-natural-muted font-bold text-sm">{t.helpSub}</p>
-                 </div>
-                 <div className="grid gap-4">
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
                     <div className="bg-white p-6 rounded-[2rem] border-2 border-natural-line shadow-sm">
                        <h4 className="font-black text-natural-heading mb-2 uppercase tracking-wide">{t.whatsappLine}</h4>
                        <p className="text-sm text-natural-muted font-medium mb-6 leading-relaxed">{t.whatsappDesc}</p>
@@ -3273,6 +3442,25 @@ function MainApp() {
                          <MessageSquare className="w-6 h-6" /> {t.talkWhatsapp}
                        </a>
                     </div>
+
+                     <div className="bg-white p-6 rounded-[2rem] border-2 border-natural-line shadow-sm flex flex-col justify-between border-dashed border-natural-accent/50 relative overflow-hidden group">
+                        <div className="absolute top-0 right-0 bg-natural-accent text-white px-3 py-1 rounded-bl-2xl text-[8px] font-black uppercase tracking-widest leading-none">USSD</div>
+                        <div>
+                          <h4 className="font-black text-natural-heading mb-2 uppercase tracking-wide">{t.customerLine}</h4>
+                          <p className="text-sm text-natural-muted font-medium mb-6 leading-relaxed">{t.customerLineDesc}</p>
+                        </div>
+                        <button 
+                          onClick={() => {
+                            setUssdOpen(true);
+                            setUssdScreen("main");
+                            setUssdInput("");
+                            setUssdError("");
+                          }}
+                          className="w-full bg-natural-accent text-white font-black py-5 rounded-2xl flex items-center justify-center gap-3 shadow-xl shadow-natural-accent/20 active:scale-95 transition-transform mt-auto"
+                        >
+                          <Phone className="w-6 h-6 animate-pulse" /> {t.dialCustomerLine}
+                        </button>
+                     </div>
                    <div className="bg-natural-surface p-8 rounded-[2.5rem] border-2 border-natural-line">
                       <h4 className="font-black text-natural-heading text-center mb-6 uppercase tracking-widest text-xs">{t.whyUse}</h4>
                       <div className="space-y-6">
