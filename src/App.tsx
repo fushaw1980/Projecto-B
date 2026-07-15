@@ -9,6 +9,7 @@ import {
   MapPin, 
   Phone, 
   CheckCircle2, 
+  ArrowUpRight, 
   Star, 
   Wrench, 
   Zap, 
@@ -477,44 +478,297 @@ const CommunityRules = ({ t }: { t: any }) => (
   </div>
 );
 
-const WorkerWallet = ({ t }: { t: any }) => (
-  <div className="bg-white border-2 border-natural-line p-6 rounded-[2.5rem] mt-6 shadow-sm overflow-hidden relative">
-    <div className="absolute top-0 right-0 p-4 opacity-10">
-      <Package className="w-12 h-12 text-natural-accent" />
-    </div>
-    <div className="flex items-center justify-between mb-4 relative z-10">
-      <div className="flex items-center gap-2">
-        <div className="p-2 bg-natural-surface rounded-xl"><Zap className="w-5 h-5 text-natural-accent" /></div>
-        <h3 className="font-black text-natural-heading uppercase tracking-tighter italic">Minha Carteira</h3>
+const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balance: number, userData: any, db: any, currentUser: any }) => {
+  const [showWithdrawModal, setShowWithdrawModal] = useState(false);
+  const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [withdrawPhone, setWithdrawPhone] = useState('');
+  const [withdrawWallet, setWithdrawWallet] = useState<'mpesa' | 'emola'>('mpesa');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [step, setStep] = useState('');
+  const [withdrawSuccess, setWithdrawSuccess] = useState(false);
+  const [txId, setTxId] = useState('');
+  const [error, setError] = useState('');
+
+  // Set default phone when userData loads
+  useEffect(() => {
+    if (userData?.phone) {
+      const clean = userData.phone.replace(/\D/g, '');
+      setWithdrawPhone(clean.startsWith('258') ? clean.slice(3) : clean);
+    }
+  }, [userData]);
+
+  const handleWithdraw = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    
+    const amt = parseFloat(withdrawAmount);
+    if (isNaN(amt) || amt <= 0) {
+      setError('Introduza um valor válido.');
+      return;
+    }
+    if (amt > balance) {
+      setError(`Saldo insuficiente. O seu saldo máximo é de ${balance} MT.`);
+      return;
+    }
+    if (withdrawPhone.length < 9) {
+      setError('Introduza um número de telemóvel válido de 9 dígitos.');
+      return;
+    }
+
+    setIsProcessing(true);
+    setStep('A estabelecer ligação com gateway móvel...');
+    await new Promise(r => setTimeout(r, 800));
+    
+    setStep('A processar pedido de transferência móvel via API...');
+    await new Promise(r => setTimeout(r, 1000));
+
+    setStep('A aguardar confirmação da rede celular...');
+    await new Promise(r => setTimeout(r, 600));
+
+    // Generate high-fidelity transaction ID
+    const prefix = withdrawWallet === 'emola' ? 'EMW' : 'MPW';
+    const dateStr = new Date().toISOString().slice(2, 10).replace(/-/g, '');
+    const randomSuffix = Math.random().toString(36).substring(2, 7).toUpperCase();
+    const generatedTxId = `${prefix}${dateStr}.${randomSuffix}`;
+    setTxId(generatedTxId);
+
+    try {
+      // Decrease balance in Firestore in real-time
+      const userRef = doc(db, 'users', currentUser.uid);
+      await updateDoc(userRef, {
+        balance: increment(-amt)
+      });
+    } catch (err) {
+      console.error("Error updating balance during withdrawal:", err);
+      setError("Erro ao atualizar o saldo no servidor.");
+      setIsProcessing(false);
+      return;
+    }
+
+    setIsProcessing(false);
+    setWithdrawSuccess(true);
+  };
+
+  return (
+    <div className="bg-white border-2 border-natural-line p-6 rounded-[2.5rem] mt-6 shadow-sm overflow-hidden relative">
+      <div className="absolute top-0 right-0 p-4 opacity-10">
+        <Package className="w-12 h-12 text-natural-accent" />
       </div>
-      <div className="text-right">
-        <p className="text-[10px] font-black text-natural-muted uppercase tracking-widest">Saldo</p>
-        <p className="text-2xl font-black text-natural-heading italic leading-none">0 MT</p>
+      <div className="flex items-center justify-between mb-4 relative z-10">
+        <div className="flex items-center gap-2">
+          <div className="p-2 bg-natural-surface rounded-xl"><Zap className="w-5 h-5 text-natural-accent" /></div>
+          <h3 className="font-black text-natural-heading uppercase tracking-tighter italic">Minha Carteira</h3>
+        </div>
+        <div className="text-right">
+          <p className="text-[10px] font-black text-natural-muted uppercase tracking-widest">Saldo</p>
+          <p className="text-2xl font-black text-natural-heading italic leading-none">{balance} MT</p>
+        </div>
       </div>
-    </div>
-    <div className="bg-natural-surface p-4 rounded-2xl border border-natural-line relative z-10">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-[9px] font-black text-natural-muted uppercase tracking-widest mb-1">Receber Via</p>
-          <div className="flex items-center gap-2">
-            <div className="bg-red-600 text-white text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-tighter">M-Pesa</div>
-            <p className="text-sm font-black text-natural-heading font-mono tracking-tight">841060800</p>
+      <div className="bg-natural-surface p-4 rounded-2xl border border-natural-line relative z-10">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-[9px] font-black text-natural-muted uppercase tracking-widest mb-1">Receber Via</p>
+            <div className="flex items-center gap-2">
+              <div className="bg-red-600 text-white text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-tighter">M-Pesa</div>
+              <p className="text-sm font-black text-natural-heading font-mono tracking-tight">
+                {userData?.phone || '841060800'}
+              </p>
+            </div>
+          </div>
+          <div className="bg-natural-line h-8 w-[1px]" />
+          <div className="text-right">
+             <p className="text-[9px] font-black text-natural-muted uppercase tracking-widest mb-1">Estado</p>
+             <span className="text-[8px] font-black uppercase text-green-600 bg-green-50 px-2 py-1 rounded-full flex items-center gap-1">
+               <div className="w-1 h-1 bg-green-500 rounded-full animate-pulse" /> Verificado
+             </span>
           </div>
         </div>
-        <div className="bg-natural-line h-8 w-[1px]" />
-        <div className="text-right">
-           <p className="text-[9px] font-black text-natural-muted uppercase tracking-widest mb-1">Estado</p>
-           <span className="text-[8px] font-black uppercase text-green-600 bg-green-50 px-2 py-1 rounded-full flex items-center gap-1">
-             <div className="w-1 h-1 bg-green-500 rounded-full animate-pulse" /> Verificado
-           </span>
-        </div>
       </div>
+      
+      {balance > 0 ? (
+        <button
+          onClick={() => {
+            setShowWithdrawModal(true);
+            setWithdrawAmount(balance.toString());
+            setWithdrawSuccess(false);
+            setError('');
+          }}
+          className="w-full mt-4 bg-natural-accent text-white font-black py-3 rounded-2xl text-[10px] uppercase tracking-widest hover:bg-natural-accent/95 transition-colors shadow-premium flex items-center justify-center gap-2"
+        >
+          <ArrowUpRight className="w-4 h-4" /> Solicitar Levantamento Móvel
+        </button>
+      ) : (
+        <p className="text-[9px] font-bold text-natural-muted mt-4 italic leading-tight">
+          * Os pagamentos são acumulados no seu saldo. Terá a opção de levantar assim que concluir biscates.
+        </p>
+      )}
+
+      {/* Withdrawal Modal */}
+      <AnimatePresence>
+        {showWithdrawModal && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-[#f4f4f4] max-w-xs w-full rounded-3xl overflow-hidden shadow-2xl border-2 border-neutral-300 font-sans text-neutral-800"
+            >
+              {!withdrawSuccess ? (
+                <form onSubmit={handleWithdraw} className="p-5 space-y-4">
+                  <div className="flex items-center justify-between border-b border-neutral-200 pb-2">
+                    <div className="flex items-center gap-2">
+                      <div className="p-1.5 bg-neutral-200 rounded-xl">
+                        <Smartphone className="w-4 h-4 text-neutral-600" />
+                      </div>
+                      <h4 className="font-black text-[10px] uppercase tracking-widest text-neutral-500">Levantamento Móvel</h4>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowWithdrawModal(false)}
+                      className="text-neutral-500 hover:text-neutral-800 text-lg font-bold leading-none"
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  {error && (
+                    <div className="bg-red-50 text-red-600 p-3 rounded-xl text-[9px] font-black uppercase tracking-wider text-center border border-red-100">
+                      ⚠️ {error}
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    {/* Wallet provider */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setWithdrawWallet('mpesa')}
+                        className={`py-2 px-1 border-2 rounded-2xl font-black text-[10px] transition-all flex flex-col items-center gap-0.5 ${
+                          withdrawWallet === 'mpesa'
+                            ? 'border-red-500 bg-red-50/20 text-red-600'
+                            : 'border-neutral-300 bg-white text-neutral-500 hover:border-neutral-400'
+                        }`}
+                      >
+                        <span className="font-black">Vodacom M-Pesa</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setWithdrawWallet('emola')}
+                        className={`py-2 px-1 border-2 rounded-2xl font-black text-[10px] transition-all flex flex-col items-center gap-0.5 ${
+                          withdrawWallet === 'emola'
+                            ? 'border-orange-500 bg-orange-50/20 text-orange-600'
+                            : 'border-neutral-300 bg-white text-neutral-500 hover:border-neutral-400'
+                        }`}
+                      >
+                        <span className="font-black">Movitel e-Mola</span>
+                      </button>
+                    </div>
+
+                    {/* Amount */}
+                    <div>
+                      <label className="block text-[8px] font-black text-neutral-400 uppercase tracking-widest mb-1">
+                        Valor a Retirar (MT)
+                      </label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          placeholder="Valor"
+                          max={balance}
+                          className="w-full px-3 py-2.5 bg-white border border-neutral-300 rounded-xl outline-none font-mono text-xs font-bold"
+                          value={withdrawAmount}
+                          onChange={(e) => setWithdrawAmount(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setWithdrawAmount(balance.toString())}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-[8px] font-black uppercase text-natural-accent bg-natural-accent/10 px-2 py-1 rounded"
+                        >
+                          Máximo
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Phone number */}
+                    <div>
+                      <label className="block text-[8px] font-black text-neutral-400 uppercase tracking-widest mb-1">
+                        Número de Telemóvel (+258)
+                      </label>
+                      <input
+                        type="tel"
+                        placeholder="84xxxxxxx"
+                        maxLength={9}
+                        className="w-full px-3 py-2.5 bg-white border border-neutral-300 rounded-xl outline-none font-mono text-xs font-bold"
+                        value={withdrawPhone}
+                        onChange={(e) => {
+                          const val = e.target.value.replace(/\D/g, '');
+                          setWithdrawPhone(val);
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isProcessing}
+                    className="w-full bg-natural-accent text-white font-black py-3.5 rounded-2xl text-[10px] uppercase tracking-widest hover:bg-natural-accent/95 transition-colors flex items-center justify-center gap-2 shadow-premium"
+                  >
+                    {isProcessing ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span className="truncate">{step}</span>
+                      </>
+                    ) : (
+                      <>
+                        <ArrowUpRight className="w-4 h-4" />
+                        <span>Levantar {withdrawAmount} MT</span>
+                      </>
+                    )}
+                  </button>
+                </form>
+              ) : (
+                <div className="p-5 text-center space-y-4">
+                  <div className="mx-auto w-10 h-10 bg-green-50 rounded-full flex items-center justify-center text-green-600 animate-bounce">
+                    <CheckCircle2 className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-xs font-black text-neutral-800 uppercase tracking-wider">Transferência Concluída!</h3>
+                  <p className="text-[10px] text-neutral-500 font-bold leading-relaxed">
+                    A quantia de <span className="text-neutral-900 font-black">{withdrawAmount} MT</span> foi enviada com sucesso para a sua carteira móvel.
+                  </p>
+                  
+                  {/* SMS Simulation Block */}
+                  <div className="bg-[#1c1c1e] text-[#f2f2f7] p-3 rounded-2xl text-left font-mono text-[8px] leading-relaxed border border-zinc-800 space-y-1">
+                    <div className="flex justify-between text-zinc-500 font-bold border-b border-zinc-800 pb-1">
+                      <span>SMS: {withdrawWallet === 'mpesa' ? 'M-Pesa' : 'e-Mola'}</span>
+                      <span>Agora mesmo</span>
+                    </div>
+                    <p className="text-white">
+                      {withdrawWallet === 'mpesa' ? (
+                        `Vodacom M-Pesa: Transacao ${txId} realizada com sucesso. Recebeu ${withdrawAmount} MT de MOZBISCATES. O seu novo saldo M-Pesa foi atualizado.`
+                      ) : (
+                        `Movitel e-Mola: Transacao ${txId} realizada. Recebeu ${withdrawAmount} MT de MOZBISCATES. Obrigado por usar e-Mola.`
+                      )}
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowWithdrawModal(false);
+                      setWithdrawSuccess(false);
+                    }}
+                    className="w-full bg-neutral-800 hover:bg-neutral-900 text-white font-black py-3 rounded-2xl text-[10px] uppercase tracking-widest transition-colors"
+                  >
+                    Fechar
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
-    <p className="text-[9px] font-bold text-natural-muted mt-4 italic leading-tight">
-      * Os pagamentos são processados para este número automaticamente após cada biscate concluído.
-    </p>
-  </div>
-);
+  );
+};
 
 const WithdrawalManagement = ({ jobs, onAction, t }: { jobs: Job[], onAction: (j: Job, a: string) => void, t: any }) => {
   const pending = jobs.filter(j => j.status === 'VALIDACAO_PENDENTE');
@@ -1316,6 +1570,17 @@ const JobCard = memo(({ job, role, onAction, t, currentUser }: { job: Job, role:
   const [showChat, setShowChat] = useState(false);
   const [showReview, setShowReview] = useState(false);
 
+  // Automated Payment States
+  const [paymentMethod, setPaymentMethod] = useState<'auto' | 'manual'>('auto');
+  const [paymentPhone, setPaymentPhone] = useState('');
+  const [paymentWallet, setPaymentWallet] = useState<'mpesa' | 'emola'>('mpesa');
+  const [isPushLoading, setIsPushLoading] = useState(false);
+  const [pushStep, setPushStep] = useState('');
+  const [showPushOverlay, setShowPushOverlay] = useState(false);
+  const [pushPin, setPushPin] = useState('');
+  const [pushError, setPushError] = useState('');
+  const [paymentSuccess, setPaymentSuccess] = useState(false);
+
   const sendPanic = () => {
     if (confirm("Deseja enviar um Alerta de Ajuda ao Garante? Sua localização será partilhada.")) {
       onAction(job, 'PANIC', { location: 'Location simulation' });
@@ -1381,24 +1646,289 @@ const JobCard = memo(({ job, role, onAction, t, currentUser }: { job: Job, role:
         </button>
       )}
 
-      {/* --- Client: Submit ID --- */}
+      {/* --- Client: Submit ID (Automated STK Push & Manual tabs) --- */}
       {role === 'client' && job.status === 'AGUARDANDO_DEPOSITO' && (
         <div className="space-y-4">
-          <div className="bg-yellow-50 p-4 rounded-2xl border border-yellow-100 text-xs font-medium text-yellow-800">
-             {t.sendMpesa} <b>{job.amount} MT</b> {t.to} <b>870324189</b> {t.andPasteCode}
+          {/* Payment Method Tabs */}
+          <div className="grid grid-cols-2 gap-2 p-1 bg-natural-surface rounded-2xl border border-natural-line">
+            <button
+              type="button"
+              onClick={() => setPaymentMethod('auto')}
+              className={`py-2 px-3 text-[10px] font-black uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+                paymentMethod === 'auto'
+                  ? 'bg-white text-natural-accent shadow-sm'
+                  : 'text-natural-muted hover:text-natural-heading'
+              }`}
+            >
+              <Smartphone className="w-3.5 h-3.5" /> ⚡ Automático
+            </button>
+            <button
+              type="button"
+              onClick={() => setPaymentMethod('manual')}
+              className={`py-2 px-3 text-[10px] font-black uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+                paymentMethod === 'manual'
+                  ? 'bg-white text-natural-accent shadow-sm'
+                  : 'text-natural-muted hover:text-natural-heading'
+              }`}
+            >
+              <Package className="w-3.5 h-3.5" /> Manual (Referência)
+            </button>
           </div>
-          <input 
-            type="text" placeholder="Código M-Pesa"
-            className="w-full p-4 border border-natural-line rounded-2xl outline-none font-mono text-sm uppercase"
-            value={txId} onChange={(e) => setTxId(e.target.value)}
-          />
-          <button 
-            disabled={!txId}
-            onClick={() => { onAction(job, 'SUBMIT_PAYMENT', { txId }); setTxId(''); }}
-            className="w-full bg-natural-accent text-white font-black py-4 rounded-2xl disabled:opacity-50"
-          >
-            {t.confirmDeposit}
-          </button>
+
+          {paymentMethod === 'auto' ? (
+            <div className="space-y-3 bg-natural-surface/30 p-4 rounded-3xl border border-natural-line">
+              <div className="flex items-center gap-2 mb-1">
+                <Shield className="w-4 h-4 text-natural-accent" />
+                <p className="text-[10px] font-black text-natural-heading uppercase tracking-wider">
+                  Garante Escrow: Pagamento Instantâneo
+                </p>
+              </div>
+
+              {/* Wallet Select */}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPaymentWallet('mpesa')}
+                  className={`py-3 px-2 border-2 rounded-2xl font-black text-xs transition-all flex flex-col items-center gap-1 ${
+                    paymentWallet === 'mpesa'
+                      ? 'border-red-500 bg-red-50/20 text-red-600'
+                      : 'border-natural-line bg-white text-natural-muted hover:border-natural-muted'
+                  }`}
+                >
+                  <span className="text-xs font-black">Vodacom M-Pesa</span>
+                  <span className="text-[8px] opacity-75 font-bold uppercase tracking-widest">STK Push API</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaymentWallet('emola')}
+                  className={`py-3 px-2 border-2 rounded-2xl font-black text-xs transition-all flex flex-col items-center gap-1 ${
+                    paymentWallet === 'emola'
+                      ? 'border-orange-500 bg-orange-50/20 text-orange-600'
+                      : 'border-natural-line bg-white text-natural-muted hover:border-natural-muted'
+                  }`}
+                >
+                  <span className="text-xs font-black">Movitel e-Mola</span>
+                  <span className="text-[8px] opacity-75 font-bold uppercase tracking-widest">STK Push API</span>
+                </button>
+              </div>
+
+              {/* Phone Input */}
+              <div>
+                <label className="block text-[8px] font-black text-natural-muted uppercase tracking-widest mb-1">
+                  Número de Telemóvel para o STK Push
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                    <span className="text-xs font-black text-natural-muted font-mono">+258</span>
+                  </div>
+                  <input
+                    type="tel"
+                    placeholder="84xxxxxxx"
+                    maxLength={9}
+                    className="w-full pl-14 pr-4 py-3.5 border border-natural-line rounded-2xl outline-none font-mono text-sm font-bold bg-white"
+                    value={paymentPhone}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/\D/g, '');
+                      setPaymentPhone(val);
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* STK Trigger Button */}
+              <button
+                type="button"
+                disabled={paymentPhone.length < 9 || isPushLoading}
+                onClick={async () => {
+                  setIsPushLoading(true);
+                  setPushStep('A ligar à API...');
+                  await new Promise((r) => setTimeout(r, 600));
+                  setPushStep('A enviar STK Push...');
+                  await new Promise((r) => setTimeout(r, 800));
+                  setIsPushLoading(false);
+                  setShowPushOverlay(true);
+                  setPushPin('');
+                  setPushError('');
+                }}
+                className={`w-full py-4 rounded-2xl font-black text-xs uppercase tracking-widest text-white shadow-premium flex items-center justify-center gap-2 ${
+                  paymentWallet === 'mpesa' ? 'bg-red-600 hover:bg-red-700 shadow-red-100' : 'bg-orange-500 hover:bg-orange-600 shadow-orange-100'
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
+              >
+                {isPushLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>{pushStep}</span>
+                  </>
+                ) : (
+                  <>
+                    <Zap className="w-4 h-4 fill-white animate-pulse" />
+                    <span>Solicitar STK Push ({job.amount} MT)</span>
+                  </>
+                )}
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="bg-yellow-50 p-4 rounded-2xl border border-yellow-100 text-xs font-medium text-yellow-800">
+                 {t.sendMpesa} <b>{job.amount} MT</b> {t.to} <b>870324189</b> {t.andPasteCode}
+              </div>
+              <input 
+                type="text" placeholder="Código M-Pesa"
+                className="w-full p-4 border border-natural-line rounded-2xl outline-none font-mono text-sm uppercase font-bold"
+                value={txId} onChange={(e) => setTxId(e.target.value)}
+              />
+              <button 
+                disabled={!txId}
+                onClick={() => { onAction(job, 'SUBMIT_PAYMENT', { txId }); setTxId(''); }}
+                className="w-full bg-natural-accent text-white font-black py-4 rounded-2xl disabled:opacity-50"
+              >
+                {t.confirmDeposit}
+              </button>
+            </div>
+          )}
+
+          {/* SIM Card Dialogue Overlay Simulation */}
+          <AnimatePresence>
+            {showPushOverlay && (
+              <div className="fixed inset-0 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+                <motion.div
+                  initial={{ scale: 0.9, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0.9, opacity: 0 }}
+                  className="bg-[#ececec] max-w-xs w-full rounded-3xl overflow-hidden shadow-2xl border-2 border-neutral-300 font-sans text-neutral-800"
+                >
+                  <div className="p-5 space-y-4">
+                    <div className="flex items-center gap-2">
+                      <div className="p-1.5 bg-neutral-200 rounded-lg">
+                        <Smartphone className="w-4 h-4 text-neutral-600" />
+                      </div>
+                      <div className="flex-1">
+                        <h4 className="text-[10px] font-black uppercase tracking-widest text-neutral-500 leading-none">
+                          {paymentWallet === 'mpesa' ? 'Vodacom M-Pesa' : 'Movitel e-Mola'}
+                        </h4>
+                        <p className="text-[8px] font-bold text-neutral-400">MozoEscrow Automated Gateway</p>
+                      </div>
+                    </div>
+
+                    <div className="bg-white p-4 rounded-2xl border border-neutral-200 text-[11px] font-medium leading-relaxed text-neutral-700">
+                      Deseja autorizar o pagamento em custódia de <span className="text-natural-accent font-black">{job.amount} MT</span> para garantir o biscate #{job.id} de <span className="font-black text-neutral-900">{job.category}</span>?
+                      <p className="mt-2 text-neutral-500 text-[9px] font-semibold">Introduza o seu PIN de 4 dígitos para confirmar a transação:</p>
+                    </div>
+
+                    <div>
+                      <input
+                        type="password"
+                        placeholder="••••"
+                        maxLength={4}
+                        className="w-full text-center py-3 bg-white border border-neutral-300 rounded-xl outline-none font-mono text-2xl tracking-[0.5em] font-black"
+                        value={pushPin}
+                        onChange={(e) => {
+                          const val = e.target.value.replace(/\D/g, '');
+                          setPushPin(val);
+                          setPushError('');
+                        }}
+                      />
+                      {pushError && (
+                        <p className="text-[9px] font-black text-red-500 mt-1 text-center">{pushError}</p>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1.5 text-[8px] font-bold text-neutral-400 justify-center">
+                      <Lock className="w-3 h-3" />
+                      <span>PIN protegido. Conexão encriptada local</span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowPushOverlay(false);
+                          setPushPin('');
+                        }}
+                        className="py-3 bg-neutral-200 hover:bg-neutral-300 text-neutral-600 rounded-xl text-[10px] font-black uppercase tracking-wider transition-colors"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        disabled={pushPin.length < 4 || isPushLoading}
+                        onClick={async () => {
+                          try {
+                            setIsPushLoading(true);
+                            setPushError('');
+                            
+                            // Call backend API to register the automatic payment transaction
+                            const response = await fetch('/api/payments/stk-push', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                phone: '258' + paymentPhone,
+                                amount: job.amount,
+                                service: paymentWallet,
+                                pin: pushPin
+                              })
+                            });
+                            
+                            const resData = await response.json();
+                            setIsPushLoading(false);
+                            
+                            if (response.ok && resData.status === 'success') {
+                              setShowPushOverlay(false);
+                              setPaymentSuccess(true);
+                              
+                              // Automatically dispatch the automated payment status update to Firestore
+                              await onAction(job, 'PAY_AUTOMATED', { txId: resData.transactionId });
+                              
+                              // Turn off success popup after 2.5 seconds
+                              setTimeout(() => {
+                                setPaymentSuccess(false);
+                              }, 2500);
+                            } else {
+                              setPushError(resData.error || 'Erro ao processar. Tente novamente.');
+                            }
+                          } catch (err) {
+                            setIsPushLoading(false);
+                            setPushError('Erro de conexão ao servidor.');
+                          }
+                        }}
+                        className={`py-3 ${
+                          paymentWallet === 'mpesa' ? 'bg-red-600 hover:bg-red-700' : 'bg-orange-500 hover:bg-orange-600'
+                        } text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition-colors disabled:opacity-50`}
+                      >
+                        {isPushLoading ? 'A Validar...' : 'Confirmar'}
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
+
+          {/* Success Overlay Animation */}
+          <AnimatePresence>
+            {paymentSuccess && (
+              <div className="fixed inset-0 bg-natural-heading/90 backdrop-blur-md flex items-center justify-center p-4 z-50">
+                <motion.div
+                  initial={{ scale: 0.8, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0.8, opacity: 0 }}
+                  className="bg-white p-6 rounded-[2.5rem] text-center max-w-xs w-full shadow-premium space-y-4"
+                >
+                  <div className="mx-auto w-12 h-12 bg-natural-success/15 rounded-full flex items-center justify-center text-natural-success animate-bounce">
+                    <CheckCircle2 className="w-8 h-8" />
+                  </div>
+                  <h3 className="text-lg font-black text-natural-heading">Depósito Confirmado!</h3>
+                  <p className="text-[11px] text-natural-muted font-bold leading-relaxed">
+                    O depósito de <span className="text-natural-heading font-black">{job.amount} MT</span> foi retido em Escrow Digital com segurança. O prestador foi notificado e já pode fazer Check-in.
+                  </p>
+                  <div className="bg-natural-surface p-3 rounded-2xl border border-natural-line">
+                    <span className="block text-[8px] font-black text-natural-muted uppercase tracking-widest mb-1">CÓDIGO DE TRANSAÇÃO</span>
+                    <span className="font-mono text-xs font-black text-natural-accent">Simulação Automática Concluída</span>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
         </div>
       )}
 
@@ -2721,6 +3251,25 @@ function MainApp() {
     return () => unsubscribe();
   }, []);
 
+  useEffect(() => {
+    if (!currentUser) {
+      setBalance(0);
+      return;
+    }
+    const unsubscribe = onSnapshot(doc(db, 'users', currentUser.uid), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        setUserData(data);
+        if (typeof data.balance === 'number') {
+          setBalance(data.balance);
+        } else {
+          setBalance(0);
+        }
+      }
+    }, (err) => console.error("User doc snapshot error:", err));
+    return () => unsubscribe();
+  }, [currentUser?.uid]);
+
   const handleRoleSelection = async (r: 'client' | 'worker' | 'admin') => {
     if (!currentUser) return;
     setRole(r);
@@ -2910,21 +3459,48 @@ function MainApp() {
 
     switch (action) {
       case 'PAY':
+      case 'SUBMIT_PAYMENT':
         update.status = 'VALIDACAO_PENDENTE';
         update.transactionId = data.txId;
         break;
+      case 'PAY_AUTOMATED':
+        update.status = 'PAGO';
+        update.transactionId = data.txId;
+        // Post real-time automatic payment confirmation message
+        await addDoc(collection(db, 'jobs', job.id, 'messages'), {
+          senderId: 'system',
+          text: `⚡ Pagamento Automatizado Confirmado! Valor de ${job.amount} MT retido em Escrow Digital com sucesso. Transação ID: ${data.txId}. O prestador já pode fazer Check-in.`,
+          createdAt: serverTimestamp()
+        }).catch(err => console.error("Error adding system message:", err));
+        break;
       case 'START':
+      case 'CHECK_IN':
         update.status = 'EM_CURSO';
-        update.photoBefore = data.photo;
+        update.photoBefore = data.photo || "https://picsum.photos/seed/before/400/300";
         break;
       case 'FINISH':
+      case 'CHECK_OUT':
         update.status = 'FINALIZADO';
-        update.photoAfter = data.photo;
+        update.photoAfter = data.photo || "https://picsum.photos/seed/after/400/300";
         break;
       case 'CONFIRM_CLIENT':
         update.status = 'CONCLUIDO';
+        const fee = job.amount * 0.1;
+        const netAmount = job.amount - fee;
         const workerRef = doc(db, 'users', job.providerId);
-        await updateDoc(workerRef, { jobs: increment(1) });
+        
+        // Update provider balance and job count in Firestore in real-time
+        await updateDoc(workerRef, { 
+          jobs: increment(1),
+          balance: increment(netAmount)
+        }).catch(err => console.error("Error updating worker profile:", err));
+        
+        // Post real-time payout message
+        await addDoc(collection(db, 'jobs', job.id, 'messages'), {
+          senderId: 'system',
+          text: `🎉 Serviço Confirmado pelo Cliente! O valor de ${netAmount.toFixed(0)} MT (deduzida taxa de comissão de 10%: ${fee.toFixed(0)} MT) foi creditado no seu saldo Mozbiscates com sucesso e está disponível na sua carteira.`,
+          createdAt: serverTimestamp()
+        }).catch(err => console.error("Error adding payout system message:", err));
         break;
       case 'VALIDATE_PAYMENT':
         update.status = 'PAGO';
@@ -3372,7 +3948,7 @@ function MainApp() {
                       </div>
                     )}
                  </div>
-                  {role === 'worker' && <WorkerWallet t={t} />}
+                  {role === 'worker' && <WorkerWallet t={t} balance={balance} userData={userData} db={db} currentUser={currentUser} />}
                   {role === 'worker' && <CommunityRules t={t} />}
                   {role === 'admin' && <WithdrawalManagement jobs={jobs} onAction={handleJobAction} t={t} />}
 

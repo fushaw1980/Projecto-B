@@ -91,10 +91,31 @@ async function startServer() {
 
   // API Mock for Mozambique Payments (M-Pesa / e-Mola)
   app.post("/api/payments/stk-push", (req, res) => {
-    const { phone, amount, service } = req.body;
-    console.log(`Triggering M-Pesa STK Push for ${phone} - Amount: ${amount} MT`);
-    // In a real app, this would call the Vodacom/Movitel API
-    res.json({ status: "pending", requestId: Math.random().toString(36).substring(7) });
+    const { phone, amount, service, pin } = req.body;
+    console.log(`[PAYMENT API] Triggering STK Push for ${phone} via ${service} - Amount: ${amount} MT`);
+    
+    if (!phone || !amount || !service) {
+      return res.status(400).json({ error: "Número de telefone, valor e carteira são obrigatórios." });
+    }
+
+    if (!pin || pin.length < 4) {
+      return res.status(400).json({ error: "PIN de autorização inválido." });
+    }
+
+    // Generate a high-fidelity transaction ID mimicking M-Pesa (MP...) or e-Mola (EM...)
+    const prefix = service.toLowerCase().includes('mola') ? 'EM' : 'MP';
+    const dateStr = new Date().toISOString().slice(2, 10).replace(/-/g, '');
+    const randomSuffix = Math.random().toString(36).substring(2, 7).toUpperCase();
+    const transactionId = `${prefix}${dateStr}.${randomSuffix}`;
+
+    res.json({ 
+      status: "success", 
+      transactionId,
+      phone,
+      amount,
+      service,
+      timestamp: new Date().toISOString()
+    });
   });
 
   // In-memory Database for Demo
