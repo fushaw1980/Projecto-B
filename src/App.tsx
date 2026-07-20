@@ -17,6 +17,7 @@ import {
   User, 
   Camera, 
   MessageSquare,
+  Calendar,
   Mic,
   ArrowRight,
   TrendingUp,
@@ -54,6 +55,18 @@ import {
   AlarmClock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend
+} from 'recharts';
 import { 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
@@ -241,44 +254,71 @@ const MapView = ({ jobs = [], providers = [], userPos, t }: { jobs?: Job[], prov
         <ChangeView center={userPos} />
         <MapControls userPos={userPos} setMapType={setMapType} mapType={mapType} />
         
-        {providers.map(p => (
-          <Marker 
-            key={p.id} 
-            position={[userPos[0] + (Math.random() - 0.5) * 0.012, userPos[1] + (Math.random() - 0.5) * 0.012]} 
-            icon={createCustomMarker('provider')}
-          >
-            <Popup className="premium-popup">
-              <div className="p-3 min-w-[160px]">
-                <div className="flex items-center gap-3 mb-3 pb-3 border-b border-natural-line/30">
-                  <div className="w-10 h-10 rounded-2xl bg-natural-surface border border-natural-line overflow-hidden shadow-sm">
-                    <img src={p.photo} alt={p.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                  </div>
-                  <div>
-                    <p className="font-black text-sm text-natural-heading leading-none mb-1">{p.name}</p>
-                    <div className="flex items-center gap-1">
-                      <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                      <span className="text-xs font-black text-natural-heading">{p.rating}</span>
-                      <span className="text-[9px] font-bold text-natural-muted">({p.jobs} jobs)</span>
+        {providers.map(p => {
+          // Calculate stable seeded coordinates for this provider based on their ID to prevent jumping
+          let hash1 = 0;
+          for (let i = 0; i < p.id.length; i++) {
+            hash1 = p.id.charCodeAt(i) + ((hash1 << 5) - hash1);
+          }
+          const randLat = Math.abs(Math.sin(hash1) * 10000) % 1;
+          const randLng = Math.abs(Math.cos(hash1) * 10000) % 1;
+          
+          const providerLat = userPos[0] + (randLat - 0.5) * 0.012;
+          const providerLng = userPos[1] + (randLng - 0.5) * 0.012;
+          const providerPos: [number, number] = [providerLat, providerLng];
+
+          // Calculate Haversine distance in km from userPos to providerPos
+          const R = 6371; // Earth's radius in km
+          const dLat = (providerLat - userPos[0]) * Math.PI / 180;
+          const dLon = (providerLng - userPos[1]) * Math.PI / 180;
+          const a = 
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(userPos[0] * Math.PI / 180) * Math.cos(providerLat * Math.PI / 180) * 
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+          const distance = R * c;
+
+          return (
+            <Marker 
+              key={p.id} 
+              position={providerPos} 
+              icon={createCustomMarker('provider')}
+            >
+              <Popup className="premium-popup">
+                <div className="p-3 min-w-[160px]">
+                  <div className="flex items-center gap-3 mb-3 pb-3 border-b border-natural-line/30">
+                    <div className="w-10 h-10 rounded-2xl bg-natural-surface border border-natural-line overflow-hidden shadow-sm">
+                      <img src={p.photo} alt={p.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                    </div>
+                    <div>
+                      <p className="font-black text-sm text-natural-heading leading-none mb-1">{p.name}</p>
+                      <div className="flex items-center gap-1">
+                        <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
+                        <span className="text-xs font-black text-natural-heading">{p.rating}</span>
+                        <span className="text-[9px] font-bold text-natural-muted">({p.jobs} jobs)</span>
+                      </div>
                     </div>
                   </div>
-                </div>
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Wrench className="w-3 h-3 text-natural-accent" />
-                    <p className="font-black text-[10px] text-natural-accent uppercase tracking-wider">{p.category}</p>
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Wrench className="w-3 h-3 text-natural-accent" />
+                      <p className="font-black text-[10px] text-natural-accent uppercase tracking-wider">{p.category}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <MapPin className="w-3 h-3 text-natural-muted" />
+                      <p className="text-[10px] text-natural-muted font-bold">
+                        {p.bairro} ({distance >= 1 ? `${distance.toFixed(1)} km` : `${(distance * 1000).toFixed(0)} m`})
+                      </p>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <MapPin className="w-3 h-3 text-natural-muted" />
-                    <p className="text-[10px] text-natural-muted font-bold">{p.bairro}</p>
-                  </div>
+                  <button className="w-full mt-3 bg-natural-accent text-white py-2 rounded-xl text-[10px] font-black uppercase tracking-tighter shadow-sm hover:scale-105 active:scale-95 transition-all">
+                    Ver Perfil
+                  </button>
                 </div>
-                <button className="w-full mt-3 bg-natural-accent text-white py-2 rounded-xl text-[10px] font-black uppercase tracking-tighter shadow-sm hover:scale-105 active:scale-95 transition-all">
-                  Ver Perfil
-                </button>
-              </div>
-            </Popup>
-          </Marker>
-        ))}
+              </Popup>
+            </Marker>
+          );
+        })}
 
         {jobs.filter(j => j.lat && j.lng).map(job => (
           <Marker key={job.id} position={[job.lat!, job.lng!]} icon={createCustomMarker('job')}>
@@ -333,6 +373,8 @@ interface Job {
   category: string;
   amount: number;
   description?: string;
+  bookingType?: string;
+  scheduledFor?: string;
   status: string;
   transactionId?: string;
   payoutTransactionId?: string;
@@ -845,6 +887,7 @@ const translations = {
     start: "Começar",
     jobs: "Biscates",
     history: "Histórico",
+    metrics: "Métricas",
     wallet: "Carteira",
     profile: "Perfil",
     chat: "Conversa",
@@ -895,6 +938,10 @@ const translations = {
     jobsDone: "Biscates",
     portfolio: "Prova de Qualidade (Portfólio)",
     combineService: "Combinar Serviço",
+    scheduleType: "Tipo de Agendamento",
+    immediate: "Imediato (Agora)",
+    scheduled: "Agendar Momento Futuro",
+    scheduleDate: "Data e Hora do Serviço",
     payAmount: "Quanto pretende pagar? (MT)",
     whatNeedsDone: "O que precisa ser feito?",
     recentReviews: "Avaliações Recentes",
@@ -907,7 +954,7 @@ const translations = {
     helpTitle: "Apoio ao Utilizador",
     helpSub: "Problemas com o pagamento ou com o biscate?",
     whatsappLine: "Linha Mozbiscates",
-    whatsappDesc: "Fale com o Moderador para validar o seu depósito manualmente.",
+    whatsappDesc: "Fale com o Moderador para suporte geral, tirar dúvidas ou obter ajuda personalizada.",
     talkWhatsapp: "Falar no WhatsApp",
     customerLine: "Linha do Cliente (*777#)",
     customerLineDesc: "Disque o código interativo *777# para o apoio dinâmico ao cliente e serviços rápidos do Garante.",
@@ -1022,6 +1069,7 @@ const translations = {
     start: "Start",
     jobs: "Jobs",
     history: "History",
+    metrics: "Metrics",
     wallet: "Wallet",
     profile: "Profile",
     chat: "Chat",
@@ -1072,6 +1120,10 @@ const translations = {
     jobsDone: "Jobs",
     portfolio: "Quality Proof (Portfolio)",
     combineService: "Combine Service",
+    scheduleType: "Schedule Type",
+    immediate: "Immediate (Now)",
+    scheduled: "Schedule Future Date",
+    scheduleDate: "Service Date & Time",
     payAmount: "How much do you intend to pay? (MT)",
     whatNeedsDone: "What needs to be done?",
     recentReviews: "Recent Reviews",
@@ -1084,7 +1136,7 @@ const translations = {
     helpTitle: "User Support",
     helpSub: "Problems with payment or the job?",
     whatsappLine: "Mozbiscates Line",
-    whatsappDesc: "Talk with the Moderator to validate your deposit manually.",
+    whatsappDesc: "Talk with the Moderator for general support, questions, or personalized help.",
     talkWhatsapp: "Talk on WhatsApp",
     customerLine: "Customer Line (*777#)",
     customerLineDesc: "Dial the interactive *777# code for dynamic support, quick verification, or emergency help.",
@@ -1199,6 +1251,7 @@ const translations = {
     start: "Opacerya",
     jobs: "Miteko",
     history: "Ovikere",
+    metrics: "Métricas",
     wallet: "Muthithu",
     profile: "Ova",
     chat: "Omaloli",
@@ -1249,6 +1302,10 @@ const translations = {
     jobsDone: "Miteko",
     portfolio: "Osuweliwa wa Muteko",
     combineService: "Olavula sa Muteko",
+    scheduleType: "Oruka sa Muteko",
+    immediate: "Vano-Vano (Mano)",
+    scheduled: "Oraveya ohiyu",
+    scheduleDate: "Eyaaha ni okathi wa Muteko",
     payAmount: "Munaphavela oliha axeni? (MT)",
     whatNeedsDone: "Exiphika enaphavela opakiwa?",
     recentReviews: "Olavula sa Anamuteko",
@@ -1261,7 +1318,7 @@ const translations = {
     helpTitle: "Nikhavelo kookhalihera",
     helpSub: "Exiphika ni oliha wala muteko?",
     whatsappLine: "WhatsApp Mozbiscates",
-    whatsappDesc: "Olavule ni Moderator wi osuwelie musurukhu anyu.",
+    whatsappDesc: "Olavule ni Moderator wi okhalane nikhavelo na otheene ni othelele ophwanya nikhaveliherro.",
     talkWhatsapp: "Olavule ni WhatsApp",
     customerLine: "Linha do Cliente (*777#)",
     customerLineDesc: "Nikhavelo wa Cliente ni ecode *777# wi othelele ophwanya nikhaveliherro na mpuwa.",
@@ -1565,7 +1622,7 @@ const JobReminder = memo(({ jobId, jobTitle, t }: { jobId: string, jobTitle: str
   );
 });
 
-const JobCard = memo(({ job, role, onAction, t, currentUser }: { job: Job, role: string, onAction: (j: Job, a: string, d?: any) => void, t: any, currentUser: any }) => {
+const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt' }: { job: Job, role: string, onAction: (j: Job, a: string, d?: any) => void, t: any, currentUser: any, lang?: string }) => {
   const [txId, setTxId] = useState('');
   const [showChat, setShowChat] = useState(false);
   const [showReview, setShowReview] = useState(false);
@@ -1630,6 +1687,21 @@ const JobCard = memo(({ job, role, onAction, t, currentUser }: { job: Job, role:
       {job.description && !showChat && (
         <div className="mb-6 p-4 bg-white border border-natural-line rounded-2xl italic text-xs text-natural-heading">
           "{job.description}"
+        </div>
+      )}
+
+      {job.bookingType === 'scheduled' && job.scheduledFor && (
+        <div className="mb-6 p-4 bg-natural-surface rounded-2xl border-2 border-natural-line border-dashed flex items-center gap-3">
+          <Calendar className="w-5 h-5 text-natural-accent shrink-0 animate-pulse" />
+          <div className="text-left">
+            <p className="text-[9px] font-black text-natural-muted uppercase tracking-wider mb-0.5">{t.scheduleDate || 'Data e Hora do Serviço'}</p>
+            <p className="text-xs font-black text-natural-heading">
+              {new Date(job.scheduledFor).toLocaleString(lang === 'pt' ? 'pt-MZ' : 'en-US', {
+                dateStyle: 'medium',
+                timeStyle: 'short'
+              })}
+            </p>
+          </div>
         </div>
       )}
 
@@ -2055,6 +2127,262 @@ const PaymentHistory = memo(({ jobs, providers, searchTerm, dateFilter, t }: { j
   );
 });
 
+const CustomTooltip = ({ active, payload, label, prefix = '', suffix = '' }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-white p-4 rounded-2xl border-2 border-natural-line shadow-premium text-left">
+        <p className="text-[10px] font-black text-natural-muted uppercase tracking-wider mb-1">{label}</p>
+        <p className="text-xs font-black text-natural-heading">
+          {payload[0].name}: <span className="text-natural-accent font-mono">{prefix}{payload[0].value.toLocaleString('pt-MZ')}{suffix}</span>
+        </p>
+      </div>
+    );
+  }
+  return null;
+};
+
+const AdminMetrics = memo(({ jobs, t }: { jobs: Job[], t: any }) => {
+  const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
+
+  const getJobDate = (job: any) => {
+    if (!job.createdAt) return null;
+    if (typeof job.createdAt.toDate === 'function') {
+      return job.createdAt.toDate();
+    }
+    if (job.createdAt instanceof Date) {
+      return job.createdAt;
+    }
+    if (job.createdAt.seconds) {
+      return new Date(job.createdAt.seconds * 1000);
+    }
+    return new Date(job.createdAt);
+  };
+
+  const getEmpty6Months = () => {
+    const monthNames = [
+      'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 
+      'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'
+    ];
+    return Array.from({ length: 6 }).map((_, i) => {
+      const d = new Date();
+      d.setMonth(d.getMonth() - i);
+      const year = d.getFullYear();
+      const monthIndex = d.getMonth();
+      const monthStr = String(monthIndex + 1).padStart(2, '0');
+      return {
+        monthKey: `${year}-${monthStr}`,
+        monthName: `${monthNames[monthIndex]}/${String(year).slice(-2)}`,
+        jobsCount: 0,
+        financialVolume: 0
+      };
+    }).reverse();
+  };
+
+  const realChartData = useMemo(() => {
+    const months = getEmpty6Months();
+    const completed = jobs.filter(j => {
+      const matchesStatus = j.status === 'CONCLUIDO';
+      const matchesCategory = selectedCategory === 'Todos' || j.category === selectedCategory;
+      return matchesStatus && matchesCategory;
+    });
+
+    completed.forEach(j => {
+      const date = getJobDate(j);
+      if (!date) return;
+      const year = date.getFullYear();
+      const monthStr = String(date.getMonth() + 1).padStart(2, '0');
+      const key = `${year}-${monthStr}`;
+
+      const found = months.find(m => m.monthKey === key);
+      if (found) {
+        found.jobsCount += 1;
+        found.financialVolume += Number(j.amount || 0);
+      }
+    });
+
+    return months;
+  }, [jobs, selectedCategory]);
+
+  const activeData = realChartData;
+
+  const stats = useMemo(() => {
+    const completed = jobs.filter(j => {
+      const matchesStatus = j.status === 'CONCLUIDO';
+      const matchesCategory = selectedCategory === 'Todos' || j.category === selectedCategory;
+      return matchesStatus && matchesCategory;
+    });
+    const totalJobs = completed.length;
+    const totalVolume = completed.reduce((acc, curr) => acc + Number(curr.amount || 0), 0);
+    const avgValue = totalJobs > 0 ? Math.round(totalVolume / totalJobs) : 0;
+    
+    const activeJobsCount = jobs.filter(j => j.status !== 'CONCLUIDO' && j.status !== 'CANCELADO').length;
+    const panicCount = jobs.filter(j => j.panicAlert).length;
+
+    return {
+      totalJobs,
+      totalVolume,
+      avgValue,
+      activeJobsCount,
+      panicCount
+    };
+  }, [jobs, selectedCategory]);
+
+  const categories = [
+    { id: 'Todos', label: t.all || 'Todos' },
+    { id: 'Electricista', label: t.catElectricista || 'Electricista' },
+    { id: 'Canalizador', label: t.catCanalizador || 'Canalizador' },
+    { id: 'Mecânico', label: t.catMecanico || 'Mecânico' },
+    { id: 'Pedreiro', label: t.catPedreiro || 'Pedreiro' },
+    { id: 'Limpeza', label: t.catLimpeza || 'Limpeza' },
+    { id: 'Motorista', label: t.catMotorista || 'Motorista' },
+    { id: 'Diarista', label: t.catDiarista || 'Diarista' },
+  ];
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500">
+
+      <div className="bg-white p-5 rounded-[2.5rem] border-2 border-natural-line shadow-premium space-y-4">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <div>
+            <h3 className="font-black text-natural-heading text-lg tracking-tight flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-natural-accent" /> Painel de Analytics
+            </h3>
+            <p className="text-[10px] text-natural-muted font-bold uppercase tracking-widest mt-0.5">
+              Métricas reais de desempenho da plataforma
+            </p>
+          </div>
+        </div>
+
+        <div className="pt-2 border-t border-natural-surface">
+          <p className="text-[8px] font-black text-natural-muted uppercase tracking-widest mb-2">Filtrar por Especialidade</p>
+          <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+            {categories.map(cat => (
+              <button
+                key={cat.id}
+                onClick={() => setSelectedCategory(cat.id)}
+                className={`px-3 py-1.5 rounded-full text-[8px] font-black uppercase border transition-all shrink-0 ${
+                  selectedCategory === cat.id 
+                    ? 'bg-natural-accent border-natural-accent text-white shadow-md' 
+                    : 'bg-white border-natural-line text-natural-muted hover:border-natural-accent/50'
+                }`}
+              >
+                {cat.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="bg-white p-5 rounded-[2rem] border-2 border-natural-line shadow-premium flex flex-col justify-between relative overflow-hidden group">
+          <div className="absolute -right-3 -top-3 w-12 h-12 bg-natural-success/5 rounded-full flex items-center justify-center text-natural-success group-hover:scale-110 transition-transform">
+            <ArrowUpRight className="w-6 h-6" />
+          </div>
+          <div>
+            <p className="text-[8px] font-black text-natural-muted uppercase tracking-widest leading-none mb-1">Volume Processado</p>
+            <h4 className="font-black text-2xl text-natural-success tracking-tighter">
+              {stats.totalVolume.toLocaleString('pt-MZ')} <span className="text-xs">MT</span>
+            </h4>
+          </div>
+          <p className="text-[8px] text-natural-muted font-bold uppercase mt-3">Biscates Concluídos</p>
+        </div>
+
+        <div className="bg-white p-5 rounded-[2rem] border-2 border-natural-line shadow-premium flex flex-col justify-between relative overflow-hidden group">
+          <div className="absolute -right-3 -top-3 w-12 h-12 bg-natural-accent/5 rounded-full flex items-center justify-center text-natural-accent group-hover:scale-110 transition-transform">
+            <CheckCircle2 className="w-5 h-5" />
+          </div>
+          <div>
+            <p className="text-[8px] font-black text-natural-muted uppercase tracking-widest leading-none mb-1">Biscates Concluídos</p>
+            <h4 className="font-black text-2xl text-natural-heading tracking-tighter">
+              {stats.totalJobs}
+            </h4>
+          </div>
+          <p className="text-[8px] text-natural-muted font-bold uppercase mt-3">Transações de Sucesso</p>
+        </div>
+
+        <div className="bg-white p-5 rounded-[2rem] border-2 border-natural-line shadow-premium flex flex-col justify-between relative overflow-hidden group">
+          <div className="absolute -right-3 -top-3 w-12 h-12 bg-blue-500/5 rounded-full flex items-center justify-center text-blue-500 group-hover:scale-110 transition-transform">
+            <Wrench className="w-5 h-5" />
+          </div>
+          <div>
+            <p className="text-[8px] font-black text-natural-muted uppercase tracking-widest leading-none mb-1">Ticket Médio</p>
+            <h4 className="font-black text-2xl text-natural-heading tracking-tighter">
+              {stats.avgValue.toLocaleString('pt-MZ')} <span className="text-xs">MT</span>
+            </h4>
+          </div>
+          <p className="text-[8px] text-natural-muted font-bold uppercase mt-3">Valor Médio por Biscate</p>
+        </div>
+
+        <div className="bg-white p-5 rounded-[2rem] border-2 border-natural-line shadow-premium flex flex-col justify-between relative overflow-hidden group">
+          <div className="absolute -right-3 -top-3 w-12 h-12 bg-orange-500/5 rounded-full flex items-center justify-center text-orange-500 group-hover:scale-110 transition-transform">
+            <Loader2 className="w-5 h-5 animate-spin text-orange-500" />
+          </div>
+          <div>
+            <p className="text-[8px] font-black text-natural-muted uppercase tracking-widest leading-none mb-1">Atividade Corrente</p>
+            <h4 className="font-black text-2xl text-natural-heading tracking-tighter">
+              {stats.activeJobsCount}
+            </h4>
+          </div>
+          <p className="text-[8px] text-natural-muted font-bold uppercase mt-3">
+            {stats.panicCount > 0 ? (
+              <span className="text-red-600 font-black animate-pulse">🚨 {stats.panicCount} SOS Alertas</span>
+            ) : (
+              "Biscates ativos no momento"
+            )}
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="bg-white p-6 rounded-[2.5rem] border-2 border-natural-line shadow-premium space-y-4">
+          <div>
+            <p className="text-[8px] font-black text-natural-muted uppercase tracking-widest leading-none mb-1">Volume Financeiro Total</p>
+            <h4 className="font-black text-sm text-natural-heading">Volume de Transações Concluídas (MT)</h4>
+          </div>
+
+          <div className="h-64 w-full text-xs font-mono">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={activeData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="colorVolume" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#1B5E20" stopOpacity={0.2}/>
+                    <stop offset="95%" stopColor="#1B5E20" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#E8E2DE" vertical={false} />
+                <XAxis dataKey="monthName" stroke="#847E79" fontSize={9} tickLine={false} />
+                <YAxis stroke="#847E79" fontSize={9} tickLine={false} axisLine={false} tickFormatter={(v) => `${v/1000}k`} />
+                <Tooltip content={<CustomTooltip prefix="" suffix=" MT" />} />
+                <Area type="monotone" dataKey="financialVolume" name="Volume Total" stroke="#1B5E20" strokeWidth={3} fillOpacity={1} fill="url(#colorVolume)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-[2.5rem] border-2 border-natural-line shadow-premium space-y-4">
+          <div>
+            <p className="text-[8px] font-black text-natural-muted uppercase tracking-widest leading-none mb-1">Quantidade de Serviços</p>
+            <h4 className="font-black text-sm text-natural-heading">Número de Biscates Concluídos</h4>
+          </div>
+
+          <div className="h-64 w-full text-xs font-mono">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={activeData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#E8E2DE" vertical={false} />
+                <XAxis dataKey="monthName" stroke="#847E79" fontSize={9} tickLine={false} />
+                <YAxis stroke="#847E79" fontSize={9} tickLine={false} axisLine={false} allowDecimals={false} />
+                <Tooltip content={<CustomTooltip prefix="" suffix=" biscates" />} />
+                <Bar dataKey="jobsCount" name="Quantidade" fill="#E65100" radius={[10, 10, 0, 0]} barSize={28} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  );
+});
+
 const AuthScreen = ({ onAuthSuccess, t, lang }: { onAuthSuccess: (user: FirebaseUser) => void, t: any, lang: string }) => {
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [email, setEmail] = useState('');
@@ -2222,7 +2550,7 @@ const LandingPage = ({ onGetStarted, lang, setLang, t }: { onGetStarted: () => v
            animate={{ opacity: 1, y: 0 }}
            transition={{ duration: 0.8, ease: "easeOut" }}
            className="max-w-4xl mx-auto text-center space-y-8"
-        >
+         >
           <div className="inline-flex items-center gap-2 bg-white border border-natural-line/50 px-4 py-2 rounded-full shadow-premium">
             <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
             <span className="text-[10px] font-black uppercase tracking-[0.2em] text-natural-muted">{t.tagline}</span>
@@ -2805,7 +3133,7 @@ function MainApp() {
   const [isRecording, setIsRecording] = useState(false);
   const [minRating, setMinRating] = useState<number>(0);
   const [onlyVerified, setOnlyVerified] = useState(false);
-  const [adminView, setAdminView] = useState<'active' | 'history'>('active');
+  const [adminView, setAdminView] = useState<'active' | 'history' | 'metrics'>('active');
   const [paymentSearch, setPaymentSearch] = useState('');
   const [paymentDate, setPaymentDate] = useState('');
   const [providerReviews, setProviderReviews] = useState<{rating: number, comment: string, date: string}[]>([]);
@@ -2814,7 +3142,7 @@ function MainApp() {
   const [hasNewJobNotify, setHasNewJobNotify] = useState(false);
 
   const t = translations[lang] || translations.pt;
-  const isAdminEmail = currentUser?.email === 'fushawshaw@gmail.com' || currentUser?.email === 'wanderj419@gmail.com';
+  const isAdminEmail = currentUser?.email === 'fushawshaw@gmail.com' || currentUser?.email === 'wanderj419@gmail.com' || currentUser?.email === 'mozbiscates@gmail.com';
   const categories = useMemo(() => {
     if (!t) return [];
     return STATIC_CATEGORIES(t);
@@ -2830,6 +3158,7 @@ function MainApp() {
   const [ussdScreen, setUssdScreen] = useState<'main' | 'how_it_works' | 'rules' | 'sos' | 'balance_check'>('main');
   const [ussdInput, setUssdInput] = useState('');
   const [ussdError, setUssdError] = useState('');
+  const [activeInfo, setActiveInfo] = useState<string | null>(null);
 
   const getUssdContent = () => {
     if (lang === 'en') {
@@ -3093,8 +3422,8 @@ function MainApp() {
           (pos) => {
             setUserLocation([pos.coords.latitude, pos.coords.longitude]);
           },
-          (err) => console.error("Location error:", err),
-          { enableHighAccuracy: true }
+          (err) => console.warn("Location warning (using default Maputo coords):", err.message),
+          { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
         );
       }
     }
@@ -3209,7 +3538,7 @@ function MainApp() {
       if (user) {
         try {
           const userDoc = await getDoc(doc(db, 'users', user.uid));
-          const isAdmin = user.email === 'fushawshaw@gmail.com' || user.email === 'wanderj419@gmail.com';
+          const isAdmin = user.email === 'fushawshaw@gmail.com' || user.email === 'wanderj419@gmail.com' || user.email === 'mozbiscates@gmail.com';
           
           if (userDoc.exists()) {
             const data = userDoc.data();
@@ -3373,6 +3702,8 @@ function MainApp() {
 
   const [bookingAmount, setBookingAmount] = useState('500');
   const [bookingDesc, setBookingDesc] = useState('');
+  const [bookingType, setBookingType] = useState<'immediate' | 'scheduled'>('immediate');
+  const [bookingDateTime, setBookingDateTime] = useState('');
   const [focusedJobId, setFocusedJobId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -3399,6 +3730,10 @@ function MainApp() {
 
   const handleStartBiscate = async (p: Provider) => {
     if (!currentUser) return;
+    if (bookingType === 'scheduled' && !bookingDateTime) {
+      alert("Por favor, selecione a data e hora para o agendamento.");
+      return;
+    }
     try {
       await addDoc(collection(db, 'jobs'), {
         providerId: p.id,
@@ -3409,6 +3744,8 @@ function MainApp() {
         bairro: userData?.bairro || bairro || '',
         amount: Number(bookingAmount),
         description: bookingDesc,
+        bookingType: bookingType,
+        scheduledFor: bookingType === 'scheduled' ? bookingDateTime : null,
         status: 'AGUARDANDO_DEPOSITO',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -3419,6 +3756,8 @@ function MainApp() {
       setTab('jobs');
       setBookingAmount('500');
       setBookingDesc('');
+      setBookingType('immediate');
+      setBookingDateTime('');
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, 'jobs');
     }
@@ -3736,9 +4075,14 @@ function MainApp() {
             BISCATES
           </button>
           {role === 'admin' && (
-            <button onClick={() => { setTab('jobs'); setAdminView('history'); }} className={`text-[12px] font-black uppercase tracking-[0.15em] transition-all whitespace-nowrap pb-3 border-b-4 ${tab === 'jobs' && adminView === 'history' ? 'text-natural-heading border-natural-accent' : 'text-natural-muted border-transparent opacity-30'}`}>
-              ADMIN
-            </button>
+            <>
+              <button onClick={() => { setTab('jobs'); setAdminView('history'); }} className={`text-[12px] font-black uppercase tracking-[0.15em] transition-all whitespace-nowrap pb-3 border-b-4 ${tab === 'jobs' && adminView === 'history' ? 'text-natural-heading border-natural-accent' : 'text-natural-muted border-transparent opacity-30'}`}>
+                {t.history}
+              </button>
+              <button onClick={() => { setTab('jobs'); setAdminView('metrics'); }} className={`text-[12px] font-black uppercase tracking-[0.15em] transition-all whitespace-nowrap pb-3 border-b-4 ${tab === 'jobs' && adminView === 'metrics' ? 'text-natural-heading border-natural-accent' : 'text-natural-muted border-transparent opacity-30'}`}>
+                {t.metrics}
+              </button>
+            </>
           )}
         </nav>
 
@@ -3896,7 +4240,15 @@ function MainApp() {
                  <div className="mb-8 p-6 bg-natural-surface rounded-[2.5rem] border-2 border-natural-line border-dashed text-center">
                     <h2 className="text-3xl font-black text-natural-heading tracking-tighter mb-1 italic">{(String(t.jobsTitle || '')).split(' ').map((w: string, i: number) => (w === 'Confiança' || w === 'Trust' || w === 'Onikhwa') ? <span key={i} className="text-natural-accent">{w}</span> : <Fragment key={i}>{w} </Fragment>)}</h2>
                     <p className="text-xs font-bold text-natural-muted uppercase tracking-widest">
-                      {role === 'worker' ? `${t.jobAlerts}: ${alertCategory}` : t.trackingPanel}
+                      {role === 'worker' 
+                        ? `${t.jobAlerts}: ${alertCategory}` 
+                        : role === 'admin' 
+                          ? adminView === 'active' 
+                            ? t.trackingPanel 
+                            : adminView === 'history' 
+                              ? t.history 
+                              : t.metrics 
+                          : t.trackingPanel}
                     </p>
                     
                       {role === 'worker' && (
@@ -3931,22 +4283,7 @@ function MainApp() {
                         </div>
                       )}
 
-                    {role === 'admin' && (
-                      <div className="mt-6 flex bg-white p-1 rounded-2xl border-2 border-natural-line">
-                        <button 
-                          onClick={() => setAdminView('active')}
-                          className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${adminView === 'active' ? 'bg-natural-accent text-white' : 'text-natural-muted'}`}
-                        >
-                          {t.active}
-                        </button>
-                        <button 
-                          onClick={() => setAdminView('history')}
-                          className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${adminView === 'history' ? 'bg-natural-accent text-white' : 'text-natural-muted'}`}
-                        >
-                          {t.history}
-                        </button>
-                      </div>
-                    )}
+
                  </div>
                   {role === 'worker' && <WorkerWallet t={t} balance={balance} userData={userData} db={db} currentUser={currentUser} />}
                   {role === 'worker' && <CommunityRules t={t} />}
@@ -3980,12 +4317,14 @@ function MainApp() {
                         t={t}
                       />
                    </div>
+                 ) : role === 'admin' && adminView === 'metrics' ? (
+                   <AdminMetrics jobs={jobs} t={t} />
                  ) : (
                    jobs.length > 0 ? (
                     <div className="space-y-4">
                       {jobs.map(j => (
                         <div key={j.id} id={`job-${j.id}`} className={focusedJobId === j.id ? 'ring-4 ring-natural-accent ring-offset-4 rounded-[2rem] animate-pulse transition-all duration-1000' : ''}>
-                          <JobCard job={j} role={role!} onAction={handleJobAction} t={t} currentUser={currentUser} />
+                          <JobCard job={j} role={role!} onAction={handleJobAction} t={t} currentUser={currentUser} lang={lang} />
                         </div>
                       ))}
                     </div>
@@ -4019,37 +4358,131 @@ function MainApp() {
                        </a>
                     </div>
 
-                     <div className="bg-white p-6 rounded-[2rem] border-2 border-natural-line shadow-sm flex flex-col justify-between border-dashed border-natural-accent/50 relative overflow-hidden group">
-                        <div className="absolute top-0 right-0 bg-natural-accent text-white px-3 py-1 rounded-bl-2xl text-[8px] font-black uppercase tracking-widest leading-none">USSD</div>
-                        <div>
-                          <h4 className="font-black text-natural-heading mb-2 uppercase tracking-wide">{t.customerLine}</h4>
-                          <p className="text-sm text-natural-muted font-medium mb-6 leading-relaxed">{t.customerLineDesc}</p>
-                        </div>
-                        <button 
-                          onClick={() => {
-                            setUssdOpen(true);
-                            setUssdScreen("main");
-                            setUssdInput("");
-                            setUssdError("");
-                          }}
-                          className="w-full bg-natural-accent text-white font-black py-5 rounded-2xl flex items-center justify-center gap-3 shadow-xl shadow-natural-accent/20 active:scale-95 transition-transform mt-auto"
-                        >
-                          <Phone className="w-6 h-6 animate-pulse" /> {t.dialCustomerLine}
-                        </button>
-                     </div>
-                   <div className="bg-natural-surface p-8 rounded-[2.5rem] border-2 border-natural-line">
-                      <h4 className="font-black text-natural-heading text-center mb-6 uppercase tracking-widest text-xs">{t.whyUse}</h4>
-                      <div className="space-y-6">
-                        <div className="flex gap-4">
-                          <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center border border-natural-line shrink-0"><CheckCircle2 className="w-5 h-5 text-natural-success" /></div>
-                          <p className="text-xs font-bold text-natural-heading leading-relaxed pt-1">{t.why1}</p>
-                        </div>
-                        <div className="flex gap-4">
-                          <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center border border-natural-line shrink-0"><Camera className="w-5 h-5 text-natural-accent" /></div>
-                          <p className="text-xs font-bold text-natural-heading leading-relaxed pt-1">{t.why2}</p>
-                        </div>
+                      <div className="bg-white p-6 rounded-[2rem] border-2 border-natural-line shadow-sm flex flex-col justify-between border-dashed border-natural-accent/50 relative overflow-hidden group">
+                         <div className="absolute top-0 right-0 bg-natural-accent text-white px-3 py-1 rounded-bl-2xl text-[8px] font-black uppercase tracking-widest leading-none">USSD</div>
+                         <div>
+                           <h4 className="font-black text-natural-heading mb-2 uppercase tracking-wide">{t.customerLine}</h4>
+                           <p className="text-sm text-natural-muted font-medium mb-6 leading-relaxed">{t.customerLineDesc}</p>
+                         </div>
+                         <button 
+                           onClick={() => {
+                             setUssdOpen(true);
+                             setUssdScreen("main");
+                             setUssdInput("");
+                             setUssdError("");
+                           }}
+                           className="w-full bg-natural-accent text-white font-black py-5 rounded-2xl flex items-center justify-center gap-3 shadow-xl shadow-natural-accent/20 active:scale-95 transition-transform mt-auto"
+                         >
+                           <Phone className="w-6 h-6 animate-pulse" /> {t.dialCustomerLine}
+                         </button>
                       </div>
-                   </div>
+
+                      <div className="bg-white p-6 rounded-[2rem] border-2 border-natural-line shadow-sm md:col-span-2 flex flex-col gap-4">
+                         <div>
+                           <h4 className="font-black text-natural-heading mb-2 uppercase tracking-wide flex items-center gap-2">
+                             <Sparkles className="w-4 h-4 text-natural-accent animate-pulse" /> Saiba Mais & Regulamentos
+                           </h4>
+                           <p className="text-xs text-natural-muted font-bold leading-relaxed">
+                             Explore informações importantes sobre a plataforma, termos de utilização e canais oficiais de envio de comunicações e relatórios:
+                           </p>
+                         </div>
+
+                         <div className="space-y-3">
+                           {/* Accordion Item 1: Sobre Nós */}
+                           <div className="border border-natural-line rounded-2xl overflow-hidden bg-natural-surface/30">
+                             <button
+                               onClick={() => setActiveInfo(activeInfo === 'about' ? null : 'about')}
+                               className="w-full p-4 flex justify-between items-center text-left hover:bg-natural-surface transition-colors"
+                             >
+                               <span className="text-xs font-black text-natural-heading uppercase tracking-wide flex items-center gap-2">
+                                 <User className="w-4 h-4 text-natural-accent" /> Sobre o Mozbiscates
+                               </span>
+                               <span className="text-xs font-black text-natural-muted">{activeInfo === 'about' ? '▲' : '▼'}</span>
+                             </button>
+                             {activeInfo === 'about' && (
+                               <div className="p-4 bg-white border-t border-natural-line text-xs font-bold text-natural-muted leading-relaxed space-y-2">
+                                 <p>
+                                   O <strong>Mozbiscates</strong> é a primeira plataforma de contratação segura e verificação de identidade em Moçambique. O nosso objetivo é conectar prestadores de serviços qualificados a clientes de forma rápida, transparente e altamente profissional.
+                                 </p>
+                                 <p>
+                                   Para garantir que os prestadores trabalhem com total dedicação e os clientes tenham paz de espírito, implementamos o inovador sistema de custódia (Escrow) e as tecnologias inteligentes de auditoria por inteligência artificial.
+                                 </p>
+                               </div>
+                             )}
+                           </div>
+
+                           {/* Accordion Item 2: Regulamentos & Segurança */}
+                           <div className="border border-natural-line rounded-2xl overflow-hidden bg-natural-surface/30">
+                             <button
+                               onClick={() => setActiveInfo(activeInfo === 'rules' ? null : 'rules')}
+                               className="w-full p-4 flex justify-between items-center text-left hover:bg-natural-surface transition-colors"
+                             >
+                               <span className="text-xs font-black text-natural-heading uppercase tracking-wide flex items-center gap-2">
+                                 <Shield className="w-4 h-4 text-natural-accent" /> Regulamentos & Segurança
+                               </span>
+                               <span className="text-xs font-black text-natural-muted">{activeInfo === 'rules' ? '▲' : '▼'}</span>
+                             </button>
+                             {activeInfo === 'rules' && (
+                               <div className="p-4 bg-white border-t border-natural-line text-xs font-bold text-natural-muted leading-relaxed space-y-2">
+                                 <p>
+                                   Para a segurança mútua da comunidade Mozbiscates, todos os utilizadores devem seguir estritamente as diretrizes abaixo:
+                                 </p>
+                                 <ul className="list-disc pl-5 space-y-1">
+                                   <li><strong>Verificação Obrigatória:</strong> Todos os prestadores devem enviar fotos reais do seu Bilhete de Identidade (BI) e uma Selfie correspondente para auditoria da nossa equipe e algoritmos.</li>
+                                   <li><strong>Canais Oficiais de Pagamento:</strong> Nunca realize pagamentos fora do fluxo oficial de Escrow do aplicativo. Transações feitas por fora perdem a nossa cobertura de reembolso e seguro.</li>
+                                   <li><strong>Check-in e Check-out:</strong> O prestador deve fazer fotos do "Antes" e do "Depois" no início e fim de cada biscate para documentar o trabalho efetuado com fidelidade.</li>
+                                 </ul>
+                               </div>
+                             )}
+                           </div>
+
+                           {/* Accordion Item 3: Relatórios & Correio de Sistema */}
+                           <div className="border border-natural-line rounded-2xl overflow-hidden bg-natural-surface/30">
+                             <button
+                               onClick={() => setActiveInfo(activeInfo === 'emails' ? null : 'emails')}
+                               className="w-full p-4 flex justify-between items-center text-left hover:bg-natural-surface transition-colors"
+                             >
+                               <span className="text-xs font-black text-natural-heading uppercase tracking-wide flex items-center gap-2">
+                                 <Mail className="w-4 h-4 text-natural-accent" /> Relatórios & Correio Oficial
+                               </span>
+                               <span className="text-xs font-black text-natural-muted">{activeInfo === 'emails' ? '▲' : '▼'}</span>
+                             </button>
+                             {activeInfo === 'emails' && (
+                               <div className="p-4 bg-white border-t border-natural-line text-xs font-bold text-natural-muted leading-relaxed space-y-2">
+                                 <p>
+                                   Toda a gestão interna e relatórios analíticos são controlados de forma automatizada:
+                                 </p>
+                                 <div className="space-y-3 pt-1">
+                                   <div className="bg-natural-surface p-3 rounded-xl border border-natural-line">
+                                     <span className="block text-[8px] font-black text-natural-muted uppercase tracking-wider leading-none mb-1">E-mail Oficial do Aplicativo</span>
+                                     <span className="text-xs font-black text-natural-accent font-mono">mozbiscates@gmail.com</span>
+                                     <p className="text-[9px] text-natural-muted mt-1">Usado exclusivamente para envio de informações de atualizações, avisos de sistema e notificações operacionais aos utilizadores.</p>
+                                   </div>
+                                   <div className="bg-natural-surface p-3 rounded-xl border border-natural-line">
+                                     <span className="block text-[8px] font-black text-natural-muted uppercase tracking-wider leading-none mb-1">Destinatário de Relatórios</span>
+                                     <span className="text-xs font-black text-natural-heading font-mono">wanderj419@gmail.com</span>
+                                     <p className="text-[9px] text-natural-muted mt-1">A plataforma gera relatórios financeiros e de atividade mensalmente e envia-os de forma automatizada para este e-mail administrativo.</p>
+                                   </div>
+                                 </div>
+                               </div>
+                             )}
+                           </div>
+                         </div>
+                      </div>
+
+                    <div className="bg-natural-surface p-8 rounded-[2.5rem] border-2 border-natural-line md:col-span-2">
+                       <h4 className="font-black text-natural-heading text-center mb-6 uppercase tracking-widest text-xs">{t.whyUse}</h4>
+                       <div className="space-y-6">
+                         <div className="flex gap-4">
+                           <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center border border-natural-line shrink-0"><CheckCircle2 className="w-5 h-5 text-natural-success" /></div>
+                           <p className="text-xs font-bold text-natural-heading leading-relaxed pt-1">{t.why1}</p>
+                         </div>
+                         <div className="flex gap-4">
+                           <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center border border-natural-line shrink-0"><Camera className="w-5 h-5 text-natural-accent" /></div>
+                           <p className="text-xs font-bold text-natural-heading leading-relaxed pt-1">{t.why2}</p>
+                         </div>
+                       </div>
+                    </div>
                  </div>
               </div>
             )}
@@ -4123,21 +4556,54 @@ function MainApp() {
                    <p className="text-[10px] font-black text-natural-muted uppercase mb-4 tracking-[0.25em]">{t.combineService}</p>
                    <div className="space-y-4">
                       <div>
+                        <label className="text-[9px] font-bold text-natural-muted uppercase ml-2 mb-1.5 block">{t.scheduleType}</label>
+                        <div className="flex bg-natural-surface p-1 rounded-2xl border-2 border-natural-line gap-1 mb-1">
+                          <button 
+                            type="button"
+                            onClick={() => setBookingType('immediate')}
+                            className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${bookingType === 'immediate' ? 'bg-natural-accent text-white' : 'text-natural-muted'}`}
+                          >
+                            {t.immediate}
+                          </button>
+                          <button 
+                            type="button"
+                            onClick={() => setBookingType('scheduled')}
+                            className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${bookingType === 'scheduled' ? 'bg-natural-accent text-white' : 'text-natural-muted'}`}
+                          >
+                            {t.scheduled}
+                          </button>
+                        </div>
+                      </div>
+
+                      {bookingType === 'scheduled' && (
+                        <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                          <label className="text-[9px] font-bold text-natural-muted uppercase ml-2 mb-1 block">{t.scheduleDate}</label>
+                          <input 
+                            type="datetime-local" 
+                            className="w-full p-4 bg-natural-surface border-2 border-natural-line rounded-2xl outline-none font-bold text-natural-heading focus:border-natural-accent transition-colors"
+                            value={bookingDateTime}
+                            onChange={(e) => setBookingDateTime(e.target.value)}
+                            min={new Date().toISOString().slice(0, 16)}
+                          />
+                        </div>
+                      )}
+
+                      <div>
                         <label className="text-[9px] font-bold text-natural-muted uppercase ml-2 mb-1 block">{t.payAmount}</label>
                         <input 
-                          type="number" 
-                          className="w-full p-4 bg-natural-surface border-2 border-natural-line rounded-2xl outline-none font-black text-natural-heading focus:border-natural-accent transition-colors"
-                          value={bookingAmount}
-                          onChange={(e) => setBookingAmount(e.target.value)}
+                           type="number" 
+                           className="w-full p-4 bg-natural-surface border-2 border-natural-line rounded-2xl outline-none font-black text-natural-heading focus:border-natural-accent transition-colors"
+                           value={bookingAmount}
+                           onChange={(e) => setBookingAmount(e.target.value)}
                         />
                       </div>
                       <div>
                         <label className="text-[9px] font-bold text-natural-muted uppercase ml-2 mb-1 block">{t.whatNeedsDone}</label>
                         <textarea 
-                          placeholder="Ex: Trocar tomada da sala..."
-                          className="w-full p-4 bg-natural-surface border-2 border-natural-line rounded-2xl outline-none text-sm font-medium text-natural-heading focus:border-natural-accent h-24 resize-none"
-                          value={bookingDesc}
-                          onChange={(e) => setBookingDesc(e.target.value)}
+                           placeholder="Ex: Trocar tomada da sala..."
+                           className="w-full p-4 bg-natural-surface border-2 border-natural-line rounded-2xl outline-none text-sm font-medium text-natural-heading focus:border-natural-accent h-24 resize-none"
+                           value={bookingDesc}
+                           onChange={(e) => setBookingDesc(e.target.value)}
                         />
                       </div>
                    </div>
