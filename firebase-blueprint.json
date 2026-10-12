@@ -14,6 +14,7 @@
         "verified": { "type": "boolean" },
         "level": { "type": "number" },
         "jobs": { "type": "number" },
+        "balance": { "type": "number" },
         "phone": { "type": "string" },
         "photo": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" }
@@ -33,9 +34,12 @@
         "description": { "type": "string" },
         "status": { "type": "string" },
         "transactionId": { "type": "string" },
+        "payoutAmount": { "type": "number" },
+        "payoutTransactionId": { "type": "string" },
         "photoBefore": { "type": "string" },
         "photoAfter": { "type": "string" },
         "panicAlert": { "type": "boolean" },
+        "panicLocation": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },

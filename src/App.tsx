@@ -52,9 +52,14 @@ import {
   Tv,
   Palette,
   Bell,
-  AlarmClock
+  AlarmClock,
+  QrCode,
+  FileText,
+  FileDown
 } from 'lucide-react';
+import jsPDF from 'jspdf';
 import { motion, AnimatePresence } from 'motion/react';
+import { Html5Qrcode } from 'html5-qrcode';
 import {
   ResponsiveContainer,
   AreaChart,
@@ -377,6 +382,7 @@ interface Job {
   scheduledFor?: string;
   status: string;
   transactionId?: string;
+  payoutAmount?: number;
   payoutTransactionId?: string;
   photoBefore?: string;
   photoAfter?: string;
@@ -501,7 +507,7 @@ const CommunityRules = ({ t }: { t: any }) => (
       <div className="flex gap-3">
         <div className="w-1.5 h-1.5 bg-natural-accent rounded-full mt-1.5 flex-shrink-0" />
         <p className="text-[11px] font-bold text-natural-muted leading-snug">
-          <b>Pagamentos Rápidos:</b> Saques M-Pesa são processados manualmente em até 24h após a conclusão.
+          <b>Pagamentos Rápidos:</b> Saques M-Pesa / e-Mola processados com taxa reduzida de apenas 3% em até 24h após a conclusão.
         </p>
       </div>
       <div className="flex gap-3">
@@ -530,6 +536,13 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
   const [withdrawSuccess, setWithdrawSuccess] = useState(false);
   const [txId, setTxId] = useState('');
   const [error, setError] = useState('');
+  const [lastWithdrawalSummary, setLastWithdrawalSummary] = useState<{ rawAmt: number, fee: number, netAmt: number }>({ rawAmt: 0, fee: 0, netAmt: 0 });
+
+  // 3% withdrawal fee
+  const WITHDRAWAL_FEE_RATE = 0.03;
+  const parsedAmt = parseFloat(withdrawAmount) || 0;
+  const currentWithdrawFee = Math.round(parsedAmt * WITHDRAWAL_FEE_RATE * 100) / 100;
+  const currentNetWithdraw = Math.max(0, Math.round((parsedAmt - currentWithdrawFee) * 100) / 100);
 
   // Set default phone when userData loads
   useEffect(() => {
@@ -557,11 +570,15 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
       return;
     }
 
+    const calculatedFee = Math.round(amt * WITHDRAWAL_FEE_RATE * 100) / 100;
+    const netPayout = Math.max(0, Math.round((amt - calculatedFee) * 100) / 100);
+    setLastWithdrawalSummary({ rawAmt: amt, fee: calculatedFee, netAmt: netPayout });
+
     setIsProcessing(true);
     setStep('A estabelecer ligação com gateway móvel...');
     await new Promise(r => setTimeout(r, 800));
     
-    setStep('A processar pedido de transferência móvel via API...');
+    setStep('A processar levantamento com taxa reduzida de 3%...');
     await new Promise(r => setTimeout(r, 1000));
 
     setStep('A aguardar confirmação da rede celular...');
@@ -576,6 +593,11 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
 
     try {
       // Decrease balance in Firestore in real-time
+      if (!currentUser?.uid) {
+        setError("Utilizador não autenticado.");
+        setIsProcessing(false);
+        return;
+      }
       const userRef = doc(db, 'users', currentUser.uid);
       await updateDoc(userRef, {
         balance: increment(-amt)
@@ -599,7 +621,13 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
       <div className="flex items-center justify-between mb-4 relative z-10">
         <div className="flex items-center gap-2">
           <div className="p-2 bg-natural-surface rounded-xl"><Zap className="w-5 h-5 text-natural-accent" /></div>
-          <h3 className="font-black text-natural-heading uppercase tracking-tighter italic">Minha Carteira</h3>
+          <div>
+            <h3 className="font-black text-natural-heading uppercase tracking-tighter italic">Minha Carteira</h3>
+            <span className="inline-flex items-center gap-1 text-[8px] font-black uppercase text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 mt-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              {t.withdrawalFeeBadge || "Taxa de Saque: 3%"}
+            </span>
+          </div>
         </div>
         <div className="text-right">
           <p className="text-[10px] font-black text-natural-muted uppercase tracking-widest">Saldo</p>
@@ -626,6 +654,31 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
           </div>
         </div>
       </div>
+
+      {typeof window !== 'undefined' && 'Notification' in window && (
+        <div className="mt-3 relative z-10">
+          {Notification.permission === 'granted' ? (
+            <div className="flex items-center gap-1.5 text-[8px] font-black uppercase tracking-wider text-natural-success bg-green-50/80 px-3 py-2 rounded-xl border border-green-200">
+              <Bell className="w-3.5 h-3.5 text-natural-success animate-pulse" />
+              <span>{t.pushNotificationsEnabled}: Alerta push automático ao creditar saldo</span>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={async () => {
+                const granted = await requestNotificationPermission();
+                if (granted) {
+                  alert("Notificações push activadas com sucesso!");
+                }
+              }}
+              className="w-full flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-wider text-amber-800 bg-amber-50 hover:bg-amber-100 px-3 py-2.5 rounded-xl border border-amber-200 transition-all shadow-sm active:scale-95"
+            >
+              <Bell className="w-4 h-4 text-amber-600 animate-bounce" />
+              <span>{t.enablePushNotifications} (Avisos Push Automáticos)</span>
+            </button>
+          )}
+        </div>
+      )}
       
       {balance > 0 ? (
         <button
@@ -637,11 +690,11 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
           }}
           className="w-full mt-4 bg-natural-accent text-white font-black py-3 rounded-2xl text-[10px] uppercase tracking-widest hover:bg-natural-accent/95 transition-colors shadow-premium flex items-center justify-center gap-2"
         >
-          <ArrowUpRight className="w-4 h-4" /> Solicitar Levantamento Móvel
+          <ArrowUpRight className="w-4 h-4" /> Solicitar Levantamento Móvel (Taxa 3%)
         </button>
       ) : (
         <p className="text-[9px] font-bold text-natural-muted mt-4 italic leading-tight">
-          * Os pagamentos são acumulados no seu saldo. Terá a opção de levantar assim que concluir biscates.
+          * Os pagamentos são acumulados no seu saldo. Terá a opção de levantar com taxa de apenas 3% assim que concluir biscates.
         </p>
       )}
 
@@ -662,7 +715,10 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
                       <div className="p-1.5 bg-neutral-200 rounded-xl">
                         <Smartphone className="w-4 h-4 text-neutral-600" />
                       </div>
-                      <h4 className="font-black text-[10px] uppercase tracking-widest text-neutral-500">Levantamento Móvel</h4>
+                      <div>
+                        <h4 className="font-black text-[10px] uppercase tracking-widest text-neutral-500">Levantamento Móvel</h4>
+                        <span className="text-[8px] font-bold text-emerald-600">Taxa Reduzida de 3%</span>
+                      </div>
                     </div>
                     <button
                       type="button"
@@ -708,9 +764,14 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
 
                     {/* Amount */}
                     <div>
-                      <label className="block text-[8px] font-black text-neutral-400 uppercase tracking-widest mb-1">
-                        Valor a Retirar (MT)
-                      </label>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="text-[8px] font-black text-neutral-400 uppercase tracking-widest">
+                          Valor a Retirar (MT)
+                        </label>
+                        <span className="text-[8px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                          Taxa de Saque: 3%
+                        </span>
+                      </div>
                       <div className="relative">
                         <input
                           type="number"
@@ -729,6 +790,24 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
                         </button>
                       </div>
                     </div>
+
+                    {/* Fee and Net breakdown */}
+                    {parsedAmt > 0 && (
+                      <div className="bg-white border border-neutral-200 rounded-xl p-2.5 space-y-1.5 text-[9px]">
+                        <div className="flex justify-between text-neutral-500">
+                          <span>Subtotal de Saque:</span>
+                          <span className="font-mono font-bold">{parsedAmt} MT</span>
+                        </div>
+                        <div className="flex justify-between text-emerald-600 font-bold">
+                          <span>Taxa de Saque (3%):</span>
+                          <span className="font-mono">- {currentWithdrawFee} MT</span>
+                        </div>
+                        <div className="pt-1.5 border-t border-neutral-200 flex justify-between font-black text-neutral-900">
+                          <span>Líquido na Carteira Móvel:</span>
+                          <span className="font-mono text-emerald-700">{currentNetWithdraw} MT</span>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Phone number */}
                     <div>
@@ -762,7 +841,7 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
                     ) : (
                       <>
                         <ArrowUpRight className="w-4 h-4" />
-                        <span>Levantar {withdrawAmount} MT</span>
+                        <span>Levantar {parsedAmt > 0 ? `${currentNetWithdraw} MT Líquidos` : `${withdrawAmount} MT`}</span>
                       </>
                     )}
                   </button>
@@ -773,9 +852,14 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
                     <CheckCircle2 className="w-6 h-6" />
                   </div>
                   <h3 className="text-xs font-black text-neutral-800 uppercase tracking-wider">Transferência Concluída!</h3>
-                  <p className="text-[10px] text-neutral-500 font-bold leading-relaxed">
-                    A quantia de <span className="text-neutral-900 font-black">{withdrawAmount} MT</span> foi enviada com sucesso para a sua carteira móvel.
-                  </p>
+                  <div className="text-[10px] text-neutral-500 font-bold leading-relaxed space-y-1">
+                    <p>
+                      A quantia de <span className="text-neutral-900 font-black">{lastWithdrawalSummary.netAmt} MT</span> foi enviada com sucesso para a sua carteira móvel.
+                    </p>
+                    <p className="text-[8px] text-emerald-600 bg-emerald-50 py-1 px-2 rounded-lg inline-block border border-emerald-200">
+                      Taxa reduzida aplicada: 3% ({lastWithdrawalSummary.fee} MT)
+                    </p>
+                  </div>
                   
                   {/* SMS Simulation Block */}
                   <div className="bg-[#1c1c1e] text-[#f2f2f7] p-3 rounded-2xl text-left font-mono text-[8px] leading-relaxed border border-zinc-800 space-y-1">
@@ -785,9 +869,9 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
                     </div>
                     <p className="text-white">
                       {withdrawWallet === 'mpesa' ? (
-                        `Vodacom M-Pesa: Transacao ${txId} realizada com sucesso. Recebeu ${withdrawAmount} MT de MOZBISCATES. O seu novo saldo M-Pesa foi atualizado.`
+                        `Vodacom M-Pesa: Transacao ${txId} realizada com sucesso. Recebeu ${lastWithdrawalSummary.netAmt} MT de MOZBISCATES (taxa de servico de saque de 3%: ${lastWithdrawalSummary.fee} MT). O seu novo saldo M-Pesa foi atualizado.`
                       ) : (
-                        `Movitel e-Mola: Transacao ${txId} realizada. Recebeu ${withdrawAmount} MT de MOZBISCATES. Obrigado por usar e-Mola.`
+                        `Movitel e-Mola: Transacao ${txId} realizada. Recebeu ${lastWithdrawalSummary.netAmt} MT de MOZBISCATES (taxa de saque de 3%: ${lastWithdrawalSummary.fee} MT). Obrigado por usar e-Mola.`
                       )}
                     </p>
                   </div>
@@ -811,6 +895,275 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
     </div>
   );
 };
+
+const WorkerEarningsTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    const data = payload[0].payload;
+    return (
+      <div className="bg-white p-3.5 rounded-2xl border-2 border-natural-line shadow-premium text-left min-w-[170px]">
+        <p className="text-[10px] font-black text-natural-muted uppercase tracking-wider mb-1.5 flex items-center gap-1">
+          <Calendar className="w-3 h-3 text-natural-accent" />
+          {data.fullMonth || label}
+        </p>
+        <div className="space-y-1">
+          <div className="flex justify-between items-center text-xs">
+            <span className="text-natural-muted font-bold text-[10px] uppercase">Acumulado:</span>
+            <span className="font-black text-natural-accent font-mono">
+              {Number(data.cumulativeEarnings || 0).toLocaleString('pt-MZ')} MT
+            </span>
+          </div>
+          <div className="flex justify-between items-center text-xs border-t border-natural-surface pt-1">
+            <span className="text-natural-muted font-bold text-[10px] uppercase">Neste Mês:</span>
+            <span className="font-black text-natural-success font-mono">
+              +{Number(data.monthlyEarnings || 0).toLocaleString('pt-MZ')} MT
+            </span>
+          </div>
+          <div className="flex justify-between items-center text-xs border-t border-natural-surface pt-1">
+            <span className="text-natural-muted font-bold text-[10px] uppercase">Biscates:</span>
+            <span className="font-black text-natural-heading">
+              {data.jobsCount || 0}
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
+const WorkerEarningsChart = memo(({ jobs, userData, balance, t }: { jobs: Job[], userData: any, balance?: number, t: any }) => {
+  const [chartMode, setChartMode] = useState<'accumulated' | 'monthly'>('accumulated');
+
+  const monthNames = [
+    'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 
+    'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'
+  ];
+  const fullMonthNames = [
+    'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+  ];
+
+  const getJobDate = (job: any): Date | null => {
+    if (!job.createdAt) return null;
+    if (typeof job.createdAt.toDate === 'function') return job.createdAt.toDate();
+    if (job.createdAt instanceof Date) return job.createdAt;
+    if (job.createdAt.seconds) return new Date(job.createdAt.seconds * 1000);
+    return new Date(job.createdAt);
+  };
+
+  const chartData = useMemo(() => {
+    // Generate the last 6 months chronologically
+    const months = Array.from({ length: 6 }).map((_, i) => {
+      const d = new Date();
+      d.setDate(1); // prevent month-day overflow
+      d.setMonth(d.getMonth() - (5 - i));
+      const year = d.getFullYear();
+      const monthIndex = d.getMonth();
+      const monthStr = String(monthIndex + 1).padStart(2, '0');
+      return {
+        monthKey: `${year}-${monthStr}`,
+        monthName: `${monthNames[monthIndex]}/${String(year).slice(-2)}`,
+        fullMonth: `${fullMonthNames[monthIndex]} ${year}`,
+        monthlyEarnings: 0,
+        cumulativeEarnings: 0,
+        jobsCount: 0
+      };
+    });
+
+    const completed = jobs.filter(j => j.status === 'CONCLUIDO');
+    let totalFromJobs = 0;
+
+    completed.forEach(j => {
+      const date = getJobDate(j);
+      if (!date) return;
+      const year = date.getFullYear();
+      const monthStr = String(date.getMonth() + 1).padStart(2, '0');
+      const key = `${year}-${monthStr}`;
+
+      const found = months.find(m => m.monthKey === key);
+      const fee = Number(j.amount || 0) * 0.1;
+      const net = Math.round(Number(j.payoutAmount ?? (Number(j.amount || 0) - fee)));
+
+      if (found) {
+        found.monthlyEarnings += net;
+        found.jobsCount += 1;
+        totalFromJobs += net;
+      }
+    });
+
+    // If no completed jobs in collection yet but worker has an existing balance,
+    // reflect their current accumulated wallet earnings in the latest month
+    const currentBalance = Number(balance ?? userData?.balance ?? 0);
+    if (totalFromJobs === 0 && currentBalance > 0) {
+      const latestMonth = months[months.length - 1];
+      latestMonth.monthlyEarnings = currentBalance;
+      latestMonth.jobsCount = Number(userData?.jobs || 1);
+    }
+
+    // Compute cumulative accumulated earnings progressively
+    let runningAccumulated = 0;
+    months.forEach(m => {
+      runningAccumulated += m.monthlyEarnings;
+      m.cumulativeEarnings = runningAccumulated;
+    });
+
+    return months;
+  }, [jobs, userData, balance]);
+
+  const totalAccumulated = chartData[chartData.length - 1]?.cumulativeEarnings || 0;
+  const totalJobsCompleted = chartData.reduce((acc, m) => acc + m.jobsCount, 0);
+  const avgMonthly = Math.round(totalAccumulated / 6);
+  const bestMonth = chartData.reduce((prev, curr) => (curr.monthlyEarnings > prev.monthlyEarnings ? curr : prev), chartData[0]);
+
+  return (
+    <div className="bg-white border-2 border-natural-line p-6 rounded-[2.5rem] mt-6 shadow-sm overflow-hidden relative">
+      <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
+        <TrendingUp className="w-16 h-16 text-natural-accent" />
+      </div>
+
+      {/* Header & Mode Switcher */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-6 relative z-10">
+        <div>
+          <div className="flex items-center gap-2">
+            <div className="p-2 bg-natural-surface rounded-xl">
+              <TrendingUp className="w-5 h-5 text-natural-accent" />
+            </div>
+            <h3 className="font-black text-natural-heading uppercase tracking-tighter italic text-base">
+              {t.workerEarningsTitle || "Ganhos Acumulados (Últimos 6 Meses)"}
+            </h3>
+          </div>
+          <p className="text-[10px] text-natural-muted font-bold uppercase tracking-widest mt-1">
+            {t.workerEarningsSub || "Evolução dos rendimentos líquidos recebidos"}
+          </p>
+        </div>
+
+        {/* View Toggle */}
+        <div className="flex bg-natural-surface p-1 rounded-2xl border border-natural-line self-stretch sm:self-auto">
+          <button
+            type="button"
+            onClick={() => setChartMode('accumulated')}
+            className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider transition-all ${
+              chartMode === 'accumulated'
+                ? 'bg-natural-accent text-white shadow-sm'
+                : 'text-natural-muted hover:text-natural-heading'
+            }`}
+          >
+            {t.accumulatedView || "Acumulado"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setChartMode('monthly')}
+            className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider transition-all ${
+              chartMode === 'monthly'
+                ? 'bg-natural-accent text-white shadow-sm'
+                : 'text-natural-muted hover:text-natural-heading'
+            }`}
+          >
+            {t.monthlyView || "Por Mês"}
+          </button>
+        </div>
+      </div>
+
+      {/* KPI Summary Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6 relative z-10">
+        <div className="bg-natural-surface/80 p-3.5 rounded-2xl border border-natural-line">
+          <p className="text-[8px] font-black text-natural-muted uppercase tracking-widest mb-0.5">
+            {t.totalAccumulated6M || "Total Acumulado"}
+          </p>
+          <p className="text-lg font-black text-natural-success italic font-mono leading-tight">
+            {totalAccumulated.toLocaleString('pt-MZ')} <span className="text-[10px] font-bold not-italic">MT</span>
+          </p>
+          <div className="flex items-center gap-1 mt-1 text-[8px] font-black text-natural-success">
+            <ArrowUpRight className="w-3 h-3" />
+            <span>6 Meses</span>
+          </div>
+        </div>
+
+        <div className="bg-natural-surface/80 p-3.5 rounded-2xl border border-natural-line">
+          <p className="text-[8px] font-black text-natural-muted uppercase tracking-widest mb-0.5">
+            {t.monthlyAverage || "Média Mensal"}
+          </p>
+          <p className="text-lg font-black text-natural-heading italic font-mono leading-tight">
+            {avgMonthly.toLocaleString('pt-MZ')} <span className="text-[10px] font-bold not-italic">MT</span>
+          </p>
+          <p className="text-[8px] font-bold text-natural-muted uppercase mt-1">
+            Por mês
+          </p>
+        </div>
+
+        <div className="bg-natural-surface/80 p-3.5 rounded-2xl border border-natural-line">
+          <p className="text-[8px] font-black text-natural-muted uppercase tracking-widest mb-0.5">
+            {t.bestMonth || "Melhor Mês"}
+          </p>
+          <p className="text-lg font-black text-natural-accent italic font-mono leading-tight">
+            {bestMonth.monthlyEarnings.toLocaleString('pt-MZ')} <span className="text-[10px] font-bold not-italic">MT</span>
+          </p>
+          <p className="text-[8px] font-black text-natural-muted uppercase mt-1">
+            {bestMonth.monthName}
+          </p>
+        </div>
+
+        <div className="bg-natural-surface/80 p-3.5 rounded-2xl border border-natural-line">
+          <p className="text-[8px] font-black text-natural-muted uppercase tracking-widest mb-0.5">
+            Biscates Feitos
+          </p>
+          <p className="text-lg font-black text-natural-heading italic font-mono leading-tight">
+            {totalJobsCompleted}
+          </p>
+          <p className="text-[8px] font-bold text-natural-muted uppercase mt-1">
+            Concluídos
+          </p>
+        </div>
+      </div>
+
+      {/* Bar Chart Container */}
+      <div className="h-56 w-full text-xs font-mono relative z-10 pt-2">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={chartData} margin={{ top: 15, right: 10, left: -15, bottom: 0 }}>
+            <defs>
+              <linearGradient id="workerBarGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#1B5E20" stopOpacity={0.95} />
+                <stop offset="100%" stopColor="#2E7D32" stopOpacity={0.75} />
+              </linearGradient>
+              <linearGradient id="workerMonthlyGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#E65100" stopOpacity={0.95} />
+                <stop offset="100%" stopColor="#F57C00" stopOpacity={0.75} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#E8E2DE" vertical={false} />
+            <XAxis dataKey="monthName" stroke="#847E79" fontSize={10} fontWeight="bold" tickLine={false} />
+            <YAxis 
+              stroke="#847E79" 
+              fontSize={9} 
+              tickLine={false} 
+              axisLine={false} 
+              tickFormatter={(v) => v >= 1000 ? `${Math.round(v/1000)}k` : `${v}`} 
+            />
+            <Tooltip content={<WorkerEarningsTooltip />} />
+            <Bar 
+              dataKey={chartMode === 'accumulated' ? 'cumulativeEarnings' : 'monthlyEarnings'} 
+              name={chartMode === 'accumulated' ? (t.accumulatedView || 'Ganhos Acumulados') : (t.monthlyView || 'Ganho do Mês')} 
+              fill={chartMode === 'accumulated' ? 'url(#workerBarGradient)' : 'url(#workerMonthlyGradient)'} 
+              radius={[8, 8, 0, 0]} 
+              maxBarSize={38} 
+            />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Footnote */}
+      <div className="mt-4 pt-3 border-t border-natural-surface flex items-center justify-between text-[9px] font-bold text-natural-muted">
+        <div className="flex items-center gap-1.5">
+          <div className="w-1.5 h-1.5 rounded-full bg-natural-success animate-pulse" />
+          <span>{t.earningsNetNote || "Valores líquidos creditados no seu saldo após taxa de 10% do Garante."}</span>
+        </div>
+        <span className="font-mono uppercase tracking-wider text-[8px] bg-natural-surface px-2 py-0.5 rounded-md border border-natural-line">
+          MZ (MT)
+        </span>
+      </div>
+    </div>
+  );
+});
 
 const WithdrawalManagement = ({ jobs, onAction, t }: { jobs: Job[], onAction: (j: Job, a: string) => void, t: any }) => {
   const pending = jobs.filter(j => j.status === 'VALIDACAO_PENDENTE');
@@ -898,6 +1251,7 @@ const translations = {
     pending: "Pendente",
     back: "Voltar",
     recording: "Gravando...",
+    listening: "A escutar... Fale agora",
     recordAudio: "Gravar Áudio",
     searchCategory: "Pesquisar categoria...",
     allBairros: "Todos os Bairros",
@@ -1062,7 +1416,50 @@ const translations = {
     resetSent: "Link de recuperação enviado para o seu e-mail.",
     signingIn: "Entrando...",
     signingUp: "Registando...",
-    logout: "Sair"
+    logout: "Sair",
+    voiceFallbackTitle: "Descreva o Problema",
+    voiceFallbackDesc: "O microfone está restrito no seu navegador ou iFrame. Descreva abaixo o que precisa de resolver em poucas palavras para encontrarmos o profissional certo:",
+    voiceFallbackPlaceholder: "Ex: cano roto, trocar lâmpada, limpar quintal, consertar ar condicionado...",
+    voiceFallbackButton: "Analisar e Pesquisar",
+    noCategoryMatched: "Pesquisando por: ",
+    categoryMatched: "Encontrámos um profissional para si: ",
+    qrTitle: "Código QR de Check-in",
+    qrDesc: "Mostre este código QR ao prestador quando ele chegar para realizar o check-in instantâneo.",
+    scanQr: "Escanear QR do Cliente",
+    scanSuccess: "Check-in realizado com sucesso via QR Code!",
+    scanError: "Código QR inválido para este trabalho.",
+    cameraRestricted: "Acesso à câmara restrito ou indisponível. Utilize o simulador abaixo para o check-in rápido:",
+    simulatedCheckin: "Simular Leitura de QR",
+    cameraLoading: "Iniciando câmara...",
+    qrCancel: "Cancelar",
+    payoutCreditedTitle: "Saldo Creditado! 💰🎉",
+    payoutCreditedBody: "O cliente confirmou o serviço finalizado. O seu saldo foi creditado com sucesso!",
+    enablePushNotifications: "Activar Alertas de Saldo",
+    pushNotificationsEnabled: "Alertas de Crédito Activos",
+    workerEarningsTitle: "Ganhos Acumulados (Últimos 6 Meses)",
+    workerEarningsSub: "Evolução dos rendimentos líquidos na sua carteira",
+    accumulatedView: "Acumulado",
+    monthlyView: "Por Mês",
+    totalAccumulated6M: "Total Acumulado",
+    monthlyAverage: "Média Mensal",
+    bestMonth: "Melhor Mês",
+    earningsNetNote: "Valores líquidos creditados no seu saldo após dedução da taxa de 10% da plataforma.",
+    withdrawalFeeBadge: "Taxa de Saque: 3%",
+    withdrawalFeeInfo: "Taxa de Saque Reduzida (3%)",
+    withdrawalFeeSummary: "Taxa da Carteira Móvel (3%)",
+    netWithdrawalAmount: "Valor Líquido a Receber",
+    withdrawalSuccessSub: "enviada com sucesso para a sua carteira móvel após taxa reduzida de saque de 3%.",
+    exportMonthlySummary: "Exportar Resumo PDF",
+    monthlySummaryTitle: "Resumo Executivo Mensal & Relatório PDF",
+    monthlySummarySub: "Exporte o relatório financeiro consolidado em formato PDF com os ganhos totais da plataforma, número de biscates e comissões arrecadadas.",
+    selectMonth: "Selecionar Mês",
+    platformTotalEarnings: "Ganhos Totais da Plataforma",
+    totalBiscatesCount: "Número de Biscates",
+    commissionsCollected: "Comissões Arrecadadas (10%)",
+    workerNetPayouts: "Repasse aos Trabalhadores",
+    generatingPdf: "A Gerar PDF...",
+    pdfExportSuccess: "Resumo mensal em formato PDF exportado com sucesso!",
+    noJobsInMonth: "Nenhum biscate concluído registado neste mês."
   },
   en: {
     welcome: "What are we solving today?",
@@ -1080,6 +1477,7 @@ const translations = {
     pending: "Pending",
     back: "Back",
     recording: "Recording...",
+    listening: "Listening... Speak now",
     recordAudio: "Record Audio",
     searchCategory: "Search category...",
     allBairros: "All Neighborhoods",
@@ -1244,7 +1642,50 @@ const translations = {
     resetSent: "Recovery link sent to your email.",
     signingIn: "Signing in...",
     signingUp: "Signing up...",
-    logout: "Logout"
+    logout: "Logout",
+    voiceFallbackTitle: "Describe your Problem",
+    voiceFallbackDesc: "Microphone is restricted in your browser or iFrame. Describe what you need in a few words below so we can find the right professional:",
+    voiceFallbackPlaceholder: "E.g. broken pipe, fix light bulb, clean yard, service AC...",
+    voiceFallbackButton: "Analyze and Search",
+    noCategoryMatched: "Searching for: ",
+    categoryMatched: "We found a professional for you: ",
+    qrTitle: "Check-in QR Code",
+    qrDesc: "Show this QR code to the provider when they arrive to perform an instant check-in.",
+    scanQr: "Scan Client QR",
+    scanSuccess: "Check-in successfully completed via QR Code!",
+    scanError: "Invalid QR code for this job.",
+    cameraRestricted: "Camera access restricted or unavailable. Use the simulator below for quick check-in:",
+    simulatedCheckin: "Simulate QR Scan",
+    cameraLoading: "Starting camera...",
+    qrCancel: "Cancel",
+    payoutCreditedTitle: "Balance Credited! 💰🎉",
+    payoutCreditedBody: "The client confirmed the completed service. Your balance has been credited successfully!",
+    enablePushNotifications: "Enable Balance Alerts",
+    pushNotificationsEnabled: "Credit Alerts Active",
+    workerEarningsTitle: "Accumulated Earnings (Last 6 Months)",
+    workerEarningsSub: "Evolution of net earnings credited to your wallet",
+    accumulatedView: "Accumulated",
+    monthlyView: "Per Month",
+    totalAccumulated6M: "Total Accumulated",
+    monthlyAverage: "Monthly Average",
+    bestMonth: "Best Month",
+    earningsNetNote: "Net earnings credited to your balance after 10% platform fee deduction.",
+    withdrawalFeeBadge: "Withdrawal Fee: 3%",
+    withdrawalFeeInfo: "Reduced Withdrawal Fee (3%)",
+    withdrawalFeeSummary: "Mobile Wallet Processing Fee (3%)",
+    netWithdrawalAmount: "Net Amount to Receive",
+    withdrawalSuccessSub: "successfully sent to your mobile wallet after reduced 3% withdrawal fee.",
+    exportMonthlySummary: "Export Monthly Summary (PDF)",
+    monthlySummaryTitle: "Monthly Executive Summary & PDF Report",
+    monthlySummarySub: "Export consolidated financial report in PDF format with total platform earnings, completed jobs, and collected commissions.",
+    selectMonth: "Select Month",
+    platformTotalEarnings: "Total Platform Earnings",
+    totalBiscatesCount: "Number of Biscates",
+    commissionsCollected: "Commissions Collected (10%)",
+    workerNetPayouts: "Worker Payouts",
+    generatingPdf: "Generating PDF...",
+    pdfExportSuccess: "Monthly summary PDF report exported successfully!",
+    noJobsInMonth: "No completed jobs recorded in this month."
   },
   em: {
     welcome: "Exiphika ninla okhwele?",
@@ -1262,6 +1703,7 @@ const translations = {
     pending: "Olokelela",
     back: "Otthikela",
     recording: "Orekavar...",
+    listening: "Osuwela... Olavule vano",
     recordAudio: "Orekavar Masu",
     searchCategory: "Ophavela muteko...",
     allBairros: "Mabairro Otheene",
@@ -1426,7 +1868,50 @@ const translations = {
     resetSent: "Link wa nikhavelo onnevehiwa wa email anyu.",
     signingIn: "Ovolowa...",
     signingUp: "Orephela...",
-    logout: "Okhuma"
+    logout: "Okhuma",
+    voiceFallbackTitle: "Oromola Muteko Anyu",
+    voiceFallbackDesc: "Microfone onrikiha. Oromole yovila anyu vano wi mphavele namuteko ooreerela:",
+    voiceFallbackPlaceholder: "E.g. cano roto, olyiha lampada, oreteha quintal...",
+    voiceFallbackButton: "Olavula ni Ophavela",
+    noCategoryMatched: "Noona ophavela: ",
+    categoryMatched: "Niphavenle namuteko ooreerela: ",
+    qrTitle: "QR Code wa Check-in",
+    qrDesc: "Onyeha QR code ola wa namuteko wi opaceerye muteko vano.",
+    scanQr: "Olekavar QR Code",
+    scanSuccess: "Check-in omalela ni QR Code!",
+    scanError: "QR Code khahiyo wooreerela muteko ola.",
+    cameraRestricted: "Câmara khinaweryeya. Opharihele ehisano ela wi opacerye muteko:",
+    simulatedCheckin: "Orehererya Olekavar QR",
+    cameraLoading: "Ohula câmara...",
+    qrCancel: "Ohiya",
+    payoutCreditedTitle: "Musurukhu Oheliwa! 💰🎉",
+    payoutCreditedBody: "Muthumi ohilipiha wi muteko woomala. Musurukhu anyu oheliwa mpuwa mwa carteira!",
+    enablePushNotifications: "Ohula Notificações Push",
+    pushNotificationsEnabled: "Notificações Sihootxe",
+    workerEarningsTitle: "Musurukhu Oothukumanyiwa (Myeeri 6 Soovira)",
+    workerEarningsSub: "Weemereriwa wa musurukhu anyu mwa carteira",
+    accumulatedView: "Oothukumanyiwa",
+    monthlyView: "Kha Mweeri",
+    totalAccumulated6M: "Ootheene Oothukumanyiwa",
+    monthlyAverage: "Exariya ya Mweeri",
+    bestMonth: "Mweeri Wooreerela",
+    earningsNetNote: "Musurukhu woopacerya oheliwa mpuwa mwa carteira anyu.",
+    withdrawalFeeBadge: "Taxa ya Saque: 3%",
+    withdrawalFeeInfo: "Taxa yookhulumuwa ya Saque (3%)",
+    withdrawalFeeSummary: "Taxa ya Carteira Móvel (3%)",
+    netWithdrawalAmount: "Musurukhu woowakheliwa",
+    withdrawalSuccessSub: "ooroihiwa mpuwa mwa carteira anyu móvel ni taxa ya 3%.",
+    exportMonthlySummary: "Okhula Resumo ya Mweeri (PDF)",
+    monthlySummaryTitle: "Resumo ya Mweeri ni Relatório PDF",
+    monthlySummarySub: "Okhula relatório ni musurukhu wotheene wa plataforma, miteko ni comissões saakheliwe.",
+    selectMonth: "Othanla Mweeri",
+    platformTotalEarnings: "Musurukhu Wotheene wa Plataforma",
+    totalBiscatesCount: "Nummero ya Miteko",
+    commissionsCollected: "Comissões Saakheliwe (10%)",
+    workerNetPayouts: "Musurukhu wa Anamuteko",
+    generatingPdf: "Okhuma PDF...",
+    pdfExportSuccess: "Relatório ya mweeri yoopacerya okhuma ni mureerelo!",
+    noJobsInMonth: "Khaavo muteko woomala mweeri yoola."
   }
 };
 
@@ -1454,7 +1939,7 @@ const JobChat = memo(({ jobId, currentUser, t }: { jobId: string, currentUser: a
   }, [messages]);
 
   const sendMessage = async () => {
-    if (!input.trim()) return;
+    if (!input.trim() || !currentUser?.uid) return;
     const text = input.trim();
     setInput('');
     try {
@@ -1472,7 +1957,7 @@ const JobChat = memo(({ jobId, currentUser, t }: { jobId: string, currentUser: a
     <div className="flex flex-col h-64 bg-natural-surface rounded-2xl overflow-hidden border border-natural-line">
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-2 no-scrollbar">
         {messages.map((m, i) => {
-          const isMe = m.senderId === currentUser.uid;
+          const isMe = m.senderId === currentUser?.uid;
           return (
             <div key={i} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[80%] p-2 rounded-xl text-[10px] font-bold ${isMe ? 'bg-natural-accent text-white shadow-accent-glow' : 'bg-white text-natural-heading'}`}>
@@ -1494,6 +1979,160 @@ const JobChat = memo(({ jobId, currentUser, t }: { jobId: string, currentUser: a
           <ArrowRight className="w-4 h-4" />
         </button>
       </div>
+    </div>
+  );
+});
+
+const QrScannerModal = memo(({ isOpen, onClose, onScanSuccess, jobId, t }: { isOpen: boolean, onClose: () => void, onScanSuccess: () => void, jobId: string, t: any }) => {
+  const [cameraError, setCameraError] = useState(false);
+  const [cameraLoading, setCameraLoading] = useState(true);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    
+    setCameraError(false);
+    setCameraLoading(true);
+
+    let html5Qrcode: Html5Qrcode | null = null;
+    const qrReaderId = "qr-reader-container";
+    
+    const timer = setTimeout(() => {
+      try {
+        html5Qrcode = new Html5Qrcode(qrReaderId);
+        html5Qrcode.start(
+          { facingMode: "environment" },
+          {
+            fps: 10,
+            qrbox: (width, height) => {
+              const size = Math.min(width, height) * 0.75;
+              return { width: size, height: size };
+            }
+          },
+          (decodedText) => {
+            const trimmed = decodedText.trim();
+            let isMatch = false;
+            if (trimmed === jobId) {
+              isMatch = true;
+            } else {
+              try {
+                const parsed = JSON.parse(trimmed);
+                if (parsed.jobId === jobId || parsed.id === jobId) {
+                  isMatch = true;
+                }
+              } catch (e) {
+                // Ignore
+              }
+            }
+
+            if (isMatch) {
+              if (html5Qrcode) {
+                html5Qrcode.stop().then(() => {
+                  onScanSuccess();
+                }).catch(err => {
+                  console.warn(err);
+                  onScanSuccess();
+                });
+              } else {
+                onScanSuccess();
+              }
+            } else {
+              alert(`${t.scanError}\n\nLido: "${decodedText}"`);
+            }
+          },
+          (errorMessage) => {
+            // Quiet debug logs
+          }
+        ).then(() => {
+          setCameraLoading(false);
+        }).catch(err => {
+          console.warn("Failed starting html5-qrcode:", err);
+          setCameraError(true);
+          setCameraLoading(false);
+        });
+      } catch (e) {
+        console.warn("Failed initializing html5-qrcode:", e);
+        setCameraError(true);
+        setCameraLoading(false);
+      }
+    }, 400);
+
+    return () => {
+      clearTimeout(timer);
+      if (html5Qrcode && html5Qrcode.isScanning) {
+        html5Qrcode.stop().catch(err => console.warn("Stop on unmount failed:", err));
+      }
+    };
+  }, [isOpen, jobId, onScanSuccess, t]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[300] flex items-center justify-center p-6 animate-in fade-in duration-200">
+      <motion.div 
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.9, opacity: 0 }}
+        className="bg-white text-natural-heading w-full max-w-sm rounded-[2.5rem] shadow-[0_25px_60px_-15px_rgba(0,0,0,0.4)] border-4 border-white overflow-hidden font-sans text-left relative"
+      >
+        <button 
+          onClick={onClose}
+          className="absolute top-5 right-5 w-8 h-8 rounded-full bg-natural-surface flex items-center justify-center text-natural-muted hover:bg-natural-line/30 transition-all active:scale-90 z-[310]"
+        >
+          <X className="w-4 h-4" />
+        </button>
+
+        <div className="p-6 space-y-4">
+          <div className="text-[10px] font-black text-natural-success tracking-[0.2em] uppercase flex items-center gap-1.5">
+            <QrCode className="w-3.5 h-3.5 animate-bounce" />
+            <span>{t.scanQr}</span>
+          </div>
+
+          <h3 className="text-lg font-black tracking-tight leading-none">
+            {t.scanQr}
+          </h3>
+
+          <div className="relative aspect-square w-full rounded-2xl overflow-hidden bg-black border-2 border-natural-line flex flex-col items-center justify-center">
+            <div id="qr-reader-container" className="absolute inset-0 w-full h-full" />
+            
+            {cameraLoading && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 text-white space-y-2 z-10">
+                <Loader2 className="w-8 h-8 animate-spin text-natural-success" />
+                <span className="text-[10px] font-bold tracking-widest uppercase">{t.cameraLoading}</span>
+              </div>
+            )}
+
+            {cameraError && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 text-white p-6 text-center space-y-3 z-10">
+                <AlertCircle className="w-8 h-8 text-red-500 animate-pulse" />
+                <p className="text-[11px] font-bold leading-relaxed text-gray-300">
+                  {t.cameraRestricted}
+                </p>
+                <div className="bg-white/5 border border-white/10 p-3 rounded-xl text-left w-full">
+                  <span className="block text-[8px] font-black text-white/55 tracking-widest uppercase mb-1">CÓDIGO DO TRABALHO</span>
+                  <span className="font-mono text-[10px] font-black text-natural-success break-all select-all">#{jobId}</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <button
+            onClick={() => {
+              onScanSuccess();
+            }}
+            className="w-full bg-natural-success text-white py-4 rounded-2xl font-black uppercase tracking-widest text-[11px] shadow-lg hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2"
+          >
+            <Sparkles className="w-4.5 h-4.5" />
+            <span>{t.simulatedCheckin}</span>
+          </button>
+
+          <button
+            onClick={onClose}
+            className="w-full bg-natural-surface hover:bg-natural-line/20 text-natural-muted py-3 rounded-2xl font-bold uppercase tracking-widest text-[10px] transition-all"
+          >
+            {t.qrCancel}
+          </button>
+        </div>
+      </motion.div>
     </div>
   );
 });
@@ -1637,6 +2276,7 @@ const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt' }: { jo
   const [pushPin, setPushPin] = useState('');
   const [pushError, setPushError] = useState('');
   const [paymentSuccess, setPaymentSuccess] = useState(false);
+  const [showQrScanner, setShowQrScanner] = useState(false);
 
   const sendPanic = () => {
     if (confirm("Deseja enviar um Alerta de Ajuda ao Garante? Sua localização será partilhada.")) {
@@ -2018,11 +2658,57 @@ const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt' }: { jo
         </div>
       )}
 
+      {/* --- Client: Display QR Code for Worker arrival check-in --- */}
+      {role === 'client' && job.status === 'PAGO' && (
+        <div className="bg-natural-surface p-5 rounded-3xl border-2 border-natural-line border-dashed text-center space-y-4 mb-4">
+          <div className="flex items-center justify-center gap-2 text-natural-success">
+            <QrCode className="w-5 h-5 animate-pulse" />
+            <span className="text-[10px] font-black uppercase tracking-wider">{t.qrTitle}</span>
+          </div>
+          
+          <div className="mx-auto bg-white p-4 rounded-3xl w-40 h-40 flex items-center justify-center shadow-md border border-natural-line">
+            <img 
+              src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(job.id)}&color=0c513f`} 
+              alt="QR Check-in" 
+              className="w-full h-full object-contain"
+            />
+          </div>
+          
+          <p className="text-[10px] font-bold text-natural-muted leading-relaxed max-w-xs mx-auto">
+            {t.qrDesc}
+          </p>
+        </div>
+      )}
+
       {/* --- Worker: Actions --- */}
       {role === 'worker' && job.status === 'PAGO' && (
-        <button onClick={() => onAction(job, 'CHECK_IN')} className="w-full bg-natural-accent text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2">
-          <Camera className="w-5 h-5" /> {t.checkIn}
-        </button>
+        <div className="space-y-2">
+          <button 
+            onClick={() => setShowQrScanner(true)} 
+            className="w-full bg-natural-success text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-lg shadow-green-100 hover:scale-[1.01] active:scale-95 transition-all"
+          >
+            <QrCode className="w-5 h-5 animate-pulse" /> {t.scanQr}
+          </button>
+          
+          <button 
+            onClick={() => onAction(job, 'CHECK_IN')} 
+            className="w-full bg-natural-accent/10 hover:bg-natural-accent/20 text-natural-accent font-bold py-3 rounded-2xl flex items-center justify-center gap-2 text-xs transition-all"
+          >
+            <Camera className="w-4 h-4" /> {t.checkIn}
+          </button>
+
+          <QrScannerModal 
+            isOpen={showQrScanner}
+            onClose={() => setShowQrScanner(false)}
+            onScanSuccess={() => {
+              setShowQrScanner(false);
+              onAction(job, 'CHECK_IN');
+              alert(t.scanSuccess);
+            }}
+            jobId={job.id}
+            t={t}
+          />
+        </div>
       )}
       {role === 'worker' && job.status === 'EM_CURSO' && (
         <button onClick={() => onAction(job, 'CHECK_OUT')} className="w-full bg-natural-success text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2">
@@ -2141,21 +2827,300 @@ const CustomTooltip = ({ active, payload, label, prefix = '', suffix = '' }: any
   return null;
 };
 
+interface MonthlyReportPdfData {
+  monthKey: string;
+  monthLabel: string;
+  totalVolume: number;
+  jobsCount: number;
+  commissionsCollected: number;
+  workerPayouts: number;
+  avgTicket: number;
+  categoriesBreakdown: { category: string; count: number; volume: number; commission: number }[];
+  jobsList: { id: string; title: string; category: string; amount: number; commission: number; dateStr: string; status: string }[];
+  issuedAt: string;
+}
+
+const generateMonthlyPdfReport = (data: MonthlyReportPdfData) => {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4'
+  });
+
+  const pageWidth = 210;
+  const pageHeight = 297;
+  const margin = 14;
+  const contentWidth = pageWidth - margin * 2; // 182mm
+
+  // Header Banner: Brand Forest Green
+  doc.setFillColor(27, 94, 32);
+  doc.rect(0, 0, pageWidth, 26, 'F');
+
+  // Accent stripe: Brand Terracotta
+  doc.setFillColor(230, 81, 0);
+  doc.rect(0, 26, pageWidth, 2.5, 'F');
+
+  // Brand Name
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(17);
+  doc.setTextColor(255, 255, 255);
+  doc.text('MOZBISCATES', margin, 12);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(215, 238, 220);
+  doc.text('A MAIOR REDE DE PRESTAÇÃO DE SERVIÇOS RÁPIDOS DE MOÇAMBIQUE', margin, 18);
+
+  // Top Right Header Badges
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(255, 255, 255);
+  doc.text('RELATÓRIO MENSAL OFICIAL', pageWidth - margin, 12, { align: 'right' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.2);
+  doc.setTextColor(215, 238, 220);
+  doc.text('PAINEL DE AUDITORIA E GESTÃO', pageWidth - margin, 18, { align: 'right' });
+
+  let y = 37;
+
+  // Title section
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.setTextColor(44, 37, 35);
+  doc.text('Resumo Mensal de Desempenho e Arrecadação', margin, y);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(132, 126, 121);
+  doc.text(`Período de Referência: ${data.monthLabel.toUpperCase()}`, margin, y + 5.5);
+
+  doc.setFontSize(7.5);
+  doc.text(`Data de Emissão: ${data.issuedAt}`, pageWidth - margin, y + 5.5, { align: 'right' });
+
+  y += 12;
+
+  // 3 Primary Highlight Boxes (KPIs)
+  const cardW = 57;
+  const cardH = 26;
+  const gap = 5.5;
+
+  // 1. Ganhos Totais da Plataforma
+  doc.setFillColor(243, 248, 243);
+  doc.setDrawColor(200, 228, 205);
+  doc.roundedRect(margin, y, cardW, cardH, 2.5, 2.5, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.8);
+  doc.setTextColor(27, 94, 32);
+  doc.text('GANHOS TOTAIS DA PLATAFORMA', margin + 4, y + 6);
+  doc.setFontSize(12.5);
+  doc.text(`${data.totalVolume.toLocaleString('pt-MZ')} MT`, margin + 4, y + 14);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.8);
+  doc.setTextColor(100, 125, 105);
+  doc.text('Volume bruto transacionado', margin + 4, y + 20);
+
+  // 2. Número de Biscates
+  const c2X = margin + cardW + gap;
+  doc.setFillColor(248, 246, 244);
+  doc.setDrawColor(228, 222, 218);
+  doc.roundedRect(c2X, y, cardW, cardH, 2.5, 2.5, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.8);
+  doc.setTextColor(44, 37, 35);
+  doc.text('NÚMERO DE BISCATES', c2X + 4, y + 6);
+  doc.setFontSize(12.5);
+  doc.text(`${data.jobsCount} serviços`, c2X + 4, y + 14);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.8);
+  doc.setTextColor(132, 126, 121);
+  doc.text('Biscates concluídos no mês', c2X + 4, y + 20);
+
+  // 3. Comissões Arrecadadas
+  const c3X = margin + (cardW + gap) * 2;
+  doc.setFillColor(254, 246, 240);
+  doc.setDrawColor(250, 215, 195);
+  doc.roundedRect(c3X, y, cardW, cardH, 2.5, 2.5, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.8);
+  doc.setTextColor(230, 81, 0);
+  doc.text('COMISSÕES ARRECADADAS (10%)', c3X + 4, y + 6);
+  doc.setFontSize(12.5);
+  doc.text(`${data.commissionsCollected.toLocaleString('pt-MZ')} MT`, c3X + 4, y + 14);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.8);
+  doc.setTextColor(180, 105, 75);
+  doc.text('Taxa retida pela MozBiscates', c3X + 4, y + 20);
+
+  y += cardH + 7;
+
+  // Secondary Distribution Strip
+  doc.setFillColor(248, 245, 242);
+  doc.setDrawColor(230, 225, 220);
+  doc.roundedRect(margin, y, contentWidth, 10.5, 2, 2, 'FD');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7);
+  doc.setTextColor(44, 37, 35);
+  doc.text('DISTRIBUIÇÃO:', margin + 4, y + 6.8);
+  doc.setFont('helvetica', 'normal');
+  doc.text('Repasse Líquido aos Trabalhadores (90%):', margin + 28, y + 6.8);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(27, 94, 32);
+  doc.text(`${data.workerPayouts.toLocaleString('pt-MZ')} MT`, margin + 82, y + 6.8);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(44, 37, 35);
+  doc.text('|   Ticket Médio por Biscate:', margin + 110, y + 6.8);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`${data.avgTicket.toLocaleString('pt-MZ')} MT`, margin + 148, y + 6.8);
+
+  y += 16;
+
+  // Section 1: Desempenho por Categoria
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(44, 37, 35);
+  doc.text('1. Desempenho Consolidado por Especialidade', margin, y);
+  y += 4;
+
+  // Table header for categories
+  doc.setFillColor(235, 230, 225);
+  doc.rect(margin, y, contentWidth, 5.8, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7);
+  doc.setTextColor(50, 45, 40);
+  doc.text('CATEGORIA / ESPECIALIDADE', margin + 3, y + 4.1);
+  doc.text('BISCATES', margin + 72, y + 4.1);
+  doc.text('VOLUME TOTAL (MT)', margin + 120, y + 4.1, { align: 'right' });
+  doc.text('COMISSÃO 10% (MT)', pageWidth - margin - 3, y + 4.1, { align: 'right' });
+  y += 5.8;
+
+  if (data.categoriesBreakdown.length === 0) {
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(7.5);
+    doc.setTextColor(140, 135, 130);
+    doc.text('Nenhum serviço registado neste período.', margin + 3, y + 5);
+    y += 9;
+  } else {
+    data.categoriesBreakdown.forEach((cat, index) => {
+      if (index % 2 === 0) {
+        doc.setFillColor(252, 250, 248);
+        doc.rect(margin, y, contentWidth, 5.2, 'F');
+      }
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7);
+      doc.setTextColor(40, 35, 30);
+      doc.text(cat.category, margin + 3, y + 3.7);
+      doc.text(`${cat.count} serviço(s)`, margin + 72, y + 3.7);
+      doc.setFont('helvetica', 'bold');
+      doc.text(`${cat.volume.toLocaleString('pt-MZ')} MT`, margin + 120, y + 3.7, { align: 'right' });
+      doc.setTextColor(230, 81, 0);
+      doc.text(`${cat.commission.toLocaleString('pt-MZ')} MT`, pageWidth - margin - 3, y + 3.7, { align: 'right' });
+      y += 5.2;
+    });
+  }
+
+  y += 7;
+
+  // Section 2: Registo Discriminado de Biscates Concluídos
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(44, 37, 35);
+  doc.text('2. Registo Discriminado de Biscates Concluídos', margin, y);
+  y += 4;
+
+  const renderJobsHeader = (currentY: number) => {
+    doc.setFillColor(235, 230, 225);
+    doc.rect(margin, currentY, contentWidth, 5.8, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.8);
+    doc.setTextColor(50, 45, 40);
+    doc.text('TÍTULO DO BISCATE', margin + 3, currentY + 4.1);
+    doc.text('CATEGORIA', margin + 75, currentY + 4.1);
+    doc.text('DATA', margin + 115, currentY + 4.1);
+    doc.text('VALOR BRUTO', margin + 150, currentY + 4.1, { align: 'right' });
+    doc.text('COMISSÃO (10%)', pageWidth - margin - 3, currentY + 4.1, { align: 'right' });
+    return currentY + 5.8;
+  };
+
+  y = renderJobsHeader(y);
+
+  if (data.jobsList.length === 0) {
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(7.5);
+    doc.setTextColor(140, 135, 130);
+    doc.text('Nenhum biscate individual concluído neste período.', margin + 3, y + 5);
+    y += 9;
+  } else {
+    data.jobsList.forEach((job, idx) => {
+      if (y > 270) {
+        doc.setDrawColor(220, 215, 210);
+        doc.line(margin, pageHeight - 14, pageWidth - margin, pageHeight - 14);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(6.5);
+        doc.setTextColor(140, 135, 130);
+        doc.text('MozBiscates Moçambique • Relatório Gerencial e Fiscal', margin, pageHeight - 9);
+        doc.text(`Página ${doc.getNumberOfPages()}`, pageWidth - margin, pageHeight - 9, { align: 'right' });
+
+        doc.addPage();
+        y = 16;
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7.5);
+        doc.setTextColor(120, 114, 110);
+        doc.text(`Continuação - Registo de Biscates (${data.monthLabel.toUpperCase()})`, margin, y);
+        y += 4;
+        y = renderJobsHeader(y);
+      }
+
+      if (idx % 2 === 0) {
+        doc.setFillColor(252, 250, 248);
+        doc.rect(margin, y, contentWidth, 5.2, 'F');
+      }
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.8);
+      doc.setTextColor(40, 35, 30);
+      const titleShort = (job.title || 'Biscate Concluído').length > 38 
+        ? (job.title || 'Biscate Concluído').substring(0, 37) + '...' 
+        : (job.title || 'Biscate Concluído');
+      doc.text(titleShort, margin + 3, y + 3.7);
+      doc.text(job.category || 'Geral', margin + 75, y + 3.7);
+      doc.text(job.dateStr, margin + 115, y + 3.7);
+      doc.setFont('helvetica', 'bold');
+      doc.text(`${job.amount.toLocaleString('pt-MZ')} MT`, margin + 150, y + 3.7, { align: 'right' });
+      doc.setTextColor(230, 81, 0);
+      doc.text(`${job.commission.toLocaleString('pt-MZ')} MT`, pageWidth - margin - 3, y + 3.7, { align: 'right' });
+      y += 5.2;
+    });
+  }
+
+  // Final page footer
+  doc.setDrawColor(220, 215, 210);
+  doc.line(margin, pageHeight - 14, pageWidth - margin, pageHeight - 14);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(140, 135, 130);
+  doc.text('MozBiscates Moçambique • Relatório Gerencial e Fiscal • Emitido pelo Painel de Administração', margin, pageHeight - 9);
+  doc.text(`Página ${doc.getNumberOfPages()}`, pageWidth - margin, pageHeight - 9, { align: 'right' });
+
+  // Save the PDF file
+  doc.save(`resumo-mensal-mozbiscates-${data.monthKey}.pdf`);
+};
+
 const AdminMetrics = memo(({ jobs, t }: { jobs: Job[], t: any }) => {
   const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
 
   const getJobDate = (job: any) => {
-    if (!job.createdAt) return null;
-    if (typeof job.createdAt.toDate === 'function') {
-      return job.createdAt.toDate();
+    const raw = job.completedAt || job.createdAt;
+    if (!raw) return null;
+    if (typeof raw.toDate === 'function') {
+      return raw.toDate();
     }
-    if (job.createdAt instanceof Date) {
-      return job.createdAt;
+    if (raw instanceof Date) {
+      return raw;
     }
-    if (job.createdAt.seconds) {
-      return new Date(job.createdAt.seconds * 1000);
+    if (raw.seconds) {
+      return new Date(raw.seconds * 1000);
     }
-    return new Date(job.createdAt);
+    return new Date(raw);
   };
 
   const getEmpty6Months = () => {
@@ -2227,6 +3192,154 @@ const AdminMetrics = memo(({ jobs, t }: { jobs: Job[], t: any }) => {
     };
   }, [jobs, selectedCategory]);
 
+  // --- MONTHLY SUMMARY & PDF EXPORT STATE & COMPUTATIONS ---
+  const MONTH_NAMES_PT = [
+    'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+  ];
+
+  const availableMonths = useMemo(() => {
+    const monthsMap: Record<string, { key: string; label: string; count: number }> = {};
+    const now = new Date();
+
+    // Generate past 12 months
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const y = d.getFullYear();
+      const m = d.getMonth();
+      const key = `${y}-${String(m + 1).padStart(2, '0')}`;
+      monthsMap[key] = {
+        key,
+        label: `${MONTH_NAMES_PT[m]} de ${y}`,
+        count: 0
+      };
+    }
+
+    // Tally completed jobs into months
+    jobs.forEach(j => {
+      if (j.status === 'CONCLUIDO') {
+        const d = getJobDate(j);
+        if (d) {
+          const y = d.getFullYear();
+          const m = d.getMonth();
+          const key = `${y}-${String(m + 1).padStart(2, '0')}`;
+          if (!monthsMap[key]) {
+            monthsMap[key] = {
+              key,
+              label: `${MONTH_NAMES_PT[m]} de ${y}`,
+              count: 0
+            };
+          }
+          monthsMap[key].count += 1;
+        }
+      }
+    });
+
+    return Object.values(monthsMap).sort((a, b) => b.key.localeCompare(a.key));
+  }, [jobs]);
+
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
+
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportSuccessMsg, setExportSuccessMsg] = useState<string | null>(null);
+  const [previewTab, setPreviewTab] = useState<'kpi' | 'categories' | 'jobs'>('kpi');
+
+  const monthlyCompletedJobs = useMemo(() => {
+    return jobs.filter(j => {
+      if (j.status !== 'CONCLUIDO') return false;
+      const d = getJobDate(j);
+      if (!d) return false;
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      return key === selectedMonth;
+    });
+  }, [jobs, selectedMonth]);
+
+  const monthlyStats = useMemo(() => {
+    const count = monthlyCompletedJobs.length;
+    const totalVolume = monthlyCompletedJobs.reduce((acc, curr) => acc + Number(curr.amount || 0), 0);
+    const totalCommissions = Math.round(totalVolume * 0.10);
+    const workerPayouts = totalVolume - totalCommissions;
+    const avgTicket = count > 0 ? Math.round(totalVolume / count) : 0;
+
+    const catMap: Record<string, { count: number; volume: number; commission: number }> = {};
+    monthlyCompletedJobs.forEach(j => {
+      const cat = j.category || 'Geral';
+      const amt = Number(j.amount || 0);
+      const comm = Math.round(amt * 0.10);
+      if (!catMap[cat]) {
+        catMap[cat] = { count: 0, volume: 0, commission: 0 };
+      }
+      catMap[cat].count += 1;
+      catMap[cat].volume += amt;
+      catMap[cat].commission += comm;
+    });
+
+    const categoriesBreakdown = Object.entries(catMap).map(([category, val]) => ({
+      category,
+      ...val
+    })).sort((a, b) => b.volume - a.volume);
+
+    return {
+      count,
+      totalVolume,
+      totalCommissions,
+      workerPayouts,
+      avgTicket,
+      categoriesBreakdown
+    };
+  }, [monthlyCompletedJobs]);
+
+  const handleExportPDF = () => {
+    try {
+      setIsExporting(true);
+      const currentMonthMeta = availableMonths.find(m => m.key === selectedMonth);
+      const monthLabel = currentMonthMeta?.label || selectedMonth;
+
+      const now = new Date();
+      const issuedAt = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()} às ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+      const jobsList = monthlyCompletedJobs.map(j => {
+        const d = getJobDate(j);
+        const dateStr = d 
+          ? `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`
+          : '--/--/----';
+        const amt = Number(j.amount || 0);
+        return {
+          id: j.id,
+          title: j.title || `Biscate #${j.id.slice(0, 6)}`,
+          category: j.category || 'Geral',
+          amount: amt,
+          commission: Math.round(amt * 0.10),
+          dateStr,
+          status: j.status
+        };
+      });
+
+      generateMonthlyPdfReport({
+        monthKey: selectedMonth,
+        monthLabel,
+        totalVolume: monthlyStats.totalVolume,
+        jobsCount: monthlyStats.count,
+        commissionsCollected: monthlyStats.totalCommissions,
+        workerPayouts: monthlyStats.workerPayouts,
+        avgTicket: monthlyStats.avgTicket,
+        categoriesBreakdown: monthlyStats.categoriesBreakdown,
+        jobsList,
+        issuedAt
+      });
+
+      setExportSuccessMsg(`${t.pdfExportSuccess || "Resumo mensal em formato PDF exportado com sucesso!"} (${monthLabel})`);
+      setTimeout(() => setExportSuccessMsg(null), 7000);
+    } catch (err) {
+      console.error("Erro ao gerar PDF:", err);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const categories = [
     { id: 'Todos', label: t.all || 'Todos' },
     { id: 'Electricista', label: t.catElectricista || 'Electricista' },
@@ -2241,11 +3354,295 @@ const AdminMetrics = memo(({ jobs, t }: { jobs: Job[], t: any }) => {
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
 
+      {/* SEÇÃO: RESUMO MENSAL DA PLATAFORMA & EXPORTAÇÃO EM PDF */}
+      <div className="bg-white p-6 sm:p-7 rounded-[2.5rem] border-2 border-natural-line shadow-premium space-y-5">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2.5">
+              <span className="p-2.5 rounded-2xl bg-natural-accent/10 text-natural-accent">
+                <FileText className="w-5 h-5" />
+              </span>
+              <div>
+                <h3 className="font-black text-natural-heading text-lg tracking-tight">
+                  {t.monthlySummaryTitle || "Resumo Executivo Mensal & Relatório PDF"}
+                </h3>
+                <p className="text-[11px] text-natural-muted font-bold">
+                  {t.monthlySummarySub || "Exporte o relatório financeiro consolidado em formato PDF com os ganhos totais da plataforma, número de biscates e comissões arrecadadas."}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
+            {/* Month Selector */}
+            <div className="flex items-center gap-2 bg-natural-surface border border-natural-line px-3 py-2 rounded-2xl w-full sm:w-auto">
+              <Calendar className="w-4 h-4 text-natural-muted shrink-0" />
+              <select
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(e.target.value)}
+                className="bg-transparent text-xs font-black text-natural-heading outline-none cursor-pointer w-full"
+              >
+                {availableMonths.map((m) => (
+                  <option key={m.key} value={m.key}>
+                    {m.label} ({m.count} {m.count === 1 ? 'biscate' : 'biscates'})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Export PDF Button */}
+            <button
+              onClick={handleExportPDF}
+              disabled={isExporting}
+              className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-2xl bg-natural-accent hover:bg-natural-accent/90 active:scale-95 text-white font-black text-xs uppercase tracking-wider shadow-md hover:shadow-lg transition-all disabled:opacity-50 cursor-pointer w-full sm:w-auto"
+            >
+              {isExporting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>{t.generatingPdf || "A Gerar PDF..."}</span>
+                </>
+              ) : (
+                <>
+                  <FileDown className="w-4 h-4" />
+                  <span>{t.exportMonthlySummary || "Exportar Resumo PDF"}</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Feedback Alert if exported */}
+        {exportSuccessMsg && (
+          <div className="flex items-center justify-between p-3.5 rounded-2xl bg-natural-success/10 border border-natural-success/20 text-natural-success animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span className="text-xs font-black">{exportSuccessMsg}</span>
+            </div>
+            <button onClick={() => setExportSuccessMsg(null)} className="text-xs font-black opacity-60 hover:opacity-100">✕</button>
+          </div>
+        )}
+
+        {/* 3 Core Highlight KPI Cards requested: Ganhos Totais, Número de Biscates, Comissões Arrecadadas */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {/* 1. Ganhos Totais da Plataforma */}
+          <div className="bg-natural-surface/50 border-2 border-natural-line rounded-2xl p-4.5 flex flex-col justify-between relative overflow-hidden group">
+            <div className="absolute -right-2 -top-2 w-12 h-12 bg-natural-success/5 rounded-full flex items-center justify-center text-natural-success">
+              <ArrowUpRight className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-[9px] font-black uppercase tracking-widest text-natural-muted mb-1 flex items-center justify-between">
+                <span>{t.platformTotalEarnings || "Ganhos Totais da Plataforma"}</span>
+                <span className="text-[10px] text-natural-success font-bold">Volume Bruto</span>
+              </p>
+              <h4 className="font-black text-2xl text-natural-success tracking-tight">
+                {monthlyStats.totalVolume.toLocaleString('pt-MZ')} <span className="text-xs font-bold text-natural-muted">MT</span>
+              </h4>
+            </div>
+            <p className="text-[10px] font-bold text-natural-muted mt-2">
+              Total financeiro dos serviços no período selecionado
+            </p>
+          </div>
+
+          {/* 2. Número de Biscates */}
+          <div className="bg-natural-surface/50 border-2 border-natural-line rounded-2xl p-4.5 flex flex-col justify-between relative overflow-hidden group">
+            <div className="absolute -right-2 -top-2 w-12 h-12 bg-blue-500/5 rounded-full flex items-center justify-center text-blue-500">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-[9px] font-black uppercase tracking-widest text-natural-muted mb-1 flex items-center justify-between">
+                <span>{t.totalBiscatesCount || "Número de Biscates"}</span>
+                <span className="text-[10px] text-blue-600 font-bold">Concluídos</span>
+              </p>
+              <h4 className="font-black text-2xl text-natural-heading tracking-tight">
+                {monthlyStats.count} <span className="text-xs font-bold text-natural-muted">serviços</span>
+              </h4>
+            </div>
+            <p className="text-[10px] font-bold text-natural-muted mt-2">
+              Trabalhos confirmados pelo cliente neste mês
+            </p>
+          </div>
+
+          {/* 3. Comissões Arrecadadas */}
+          <div className="bg-orange-50/60 border-2 border-orange-200/80 rounded-2xl p-4.5 flex flex-col justify-between relative overflow-hidden group">
+            <div className="absolute -right-2 -top-2 w-12 h-12 bg-natural-accent/10 rounded-full flex items-center justify-center text-natural-accent">
+              <TrendingUp className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-[9px] font-black uppercase tracking-widest text-natural-accent mb-1 flex items-center justify-between">
+                <span>{t.commissionsCollected || "Comissões Arrecadadas"}</span>
+                <span className="px-2 py-0.5 rounded-full bg-natural-accent text-white text-[9px] font-black">10%</span>
+              </p>
+              <h4 className="font-black text-2xl text-natural-accent tracking-tight">
+                {monthlyStats.totalCommissions.toLocaleString('pt-MZ')} <span className="text-xs font-bold">MT</span>
+              </h4>
+            </div>
+            <p className="text-[10px] font-bold text-natural-muted mt-2">
+              Receita retida pela taxa da MozBiscates
+            </p>
+          </div>
+        </div>
+
+        {/* Secondary Financial Information Strip */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 rounded-2xl bg-natural-surface border border-natural-line text-xs">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-natural-success"></span>
+            <span className="text-natural-muted font-bold">
+              {t.workerNetPayouts || "Repasse Líquido aos Trabalhadores (90%)"}:
+            </span>
+            <span className="font-black text-natural-success font-mono">
+              {monthlyStats.workerPayouts.toLocaleString('pt-MZ')} MT
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-natural-muted font-bold">Ticket Médio por Biscate:</span>
+            <span className="font-black text-natural-heading font-mono">
+              {monthlyStats.avgTicket.toLocaleString('pt-MZ')} MT
+            </span>
+          </div>
+        </div>
+
+        {/* Tabs for Preview: Overview, Categories Breakdown, Individual Jobs List */}
+        <div className="pt-2 border-t border-natural-line/60">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex gap-2">
+              <button
+                onClick={() => setPreviewTab('kpi')}
+                className={`px-3 py-1 rounded-full text-[10px] font-black uppercase transition-all ${
+                  previewTab === 'kpi'
+                    ? 'bg-natural-heading text-white shadow-sm'
+                    : 'bg-natural-surface text-natural-muted hover:text-natural-heading'
+                }`}
+              >
+                Resumo Geral
+              </button>
+              <button
+                onClick={() => setPreviewTab('categories')}
+                className={`px-3 py-1 rounded-full text-[10px] font-black uppercase transition-all ${
+                  previewTab === 'categories'
+                    ? 'bg-natural-heading text-white shadow-sm'
+                    : 'bg-natural-surface text-natural-muted hover:text-natural-heading'
+                }`}
+              >
+                Por Especialidade ({monthlyStats.categoriesBreakdown.length})
+              </button>
+              <button
+                onClick={() => setPreviewTab('jobs')}
+                className={`px-3 py-1 rounded-full text-[10px] font-black uppercase transition-all ${
+                  previewTab === 'jobs'
+                    ? 'bg-natural-heading text-white shadow-sm'
+                    : 'bg-natural-surface text-natural-muted hover:text-natural-heading'
+                }`}
+              >
+                Lista de Biscates ({monthlyStats.count})
+              </button>
+            </div>
+
+            <p className="text-[10px] font-bold text-natural-muted hidden sm:block">
+              {availableMonths.find(m => m.key === selectedMonth)?.label}
+            </p>
+          </div>
+
+          {previewTab === 'categories' && (
+            <div className="border border-natural-line rounded-2xl overflow-hidden">
+              {monthlyStats.categoriesBreakdown.length === 0 ? (
+                <div className="p-6 text-center text-natural-muted text-xs font-bold">
+                  {t.noJobsInMonth || "Nenhum biscate concluído registado neste mês."}
+                </div>
+              ) : (
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-natural-surface border-b border-natural-line text-[9px] font-black text-natural-muted uppercase">
+                      <th className="p-3">Categoria</th>
+                      <th className="p-3 text-center">Biscates</th>
+                      <th className="p-3 text-right">Volume (MT)</th>
+                      <th className="p-3 text-right">Comissão 10% (MT)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-natural-line/60">
+                    {monthlyStats.categoriesBreakdown.map((cat, idx) => (
+                      <tr key={idx} className="hover:bg-natural-surface/40">
+                        <td className="p-3 font-black text-natural-heading">{cat.category}</td>
+                        <td className="p-3 text-center font-bold text-natural-muted">{cat.count}</td>
+                        <td className="p-3 text-right font-mono font-bold text-natural-heading">{cat.volume.toLocaleString('pt-MZ')} MT</td>
+                        <td className="p-3 text-right font-mono font-black text-natural-accent">{cat.commission.toLocaleString('pt-MZ')} MT</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+
+          {previewTab === 'jobs' && (
+            <div className="border border-natural-line rounded-2xl overflow-hidden max-h-72 overflow-y-auto">
+              {monthlyCompletedJobs.length === 0 ? (
+                <div className="p-6 text-center text-natural-muted text-xs font-bold">
+                  {t.noJobsInMonth || "Nenhum biscate concluído registado neste mês."}
+                </div>
+              ) : (
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-natural-surface border-b border-natural-line text-[9px] font-black text-natural-muted uppercase sticky top-0">
+                      <th className="p-3">Título / Serviço</th>
+                      <th className="p-3">Categoria</th>
+                      <th className="p-3">Data</th>
+                      <th className="p-3 text-right">Valor (MT)</th>
+                      <th className="p-3 text-right">Comissão 10%</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-natural-line/60">
+                    {monthlyCompletedJobs.map((j) => {
+                      const d = getJobDate(j);
+                      const amt = Number(j.amount || 0);
+                      const comm = Math.round(amt * 0.10);
+                      return (
+                        <tr key={j.id} className="hover:bg-natural-surface/40">
+                          <td className="p-3 font-black text-natural-heading">
+                            {j.title || `Biscate #${j.id.slice(0, 6)}`}
+                          </td>
+                          <td className="p-3 text-natural-muted font-bold">{j.category}</td>
+                          <td className="p-3 text-natural-muted font-mono text-[11px]">
+                            {d ? d.toLocaleDateString('pt-MZ') : '--/--/----'}
+                          </td>
+                          <td className="p-3 text-right font-mono font-bold text-natural-heading">
+                            {amt.toLocaleString('pt-MZ')} MT
+                          </td>
+                          <td className="p-3 text-right font-mono font-black text-natural-accent">
+                            {comm.toLocaleString('pt-MZ')} MT
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+
+          {previewTab === 'kpi' && (
+            <div className="p-4 rounded-2xl bg-natural-surface/60 border border-natural-line text-xs space-y-2">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                <span className="text-natural-muted font-bold">
+                  O ficheiro PDF gerado incluirá cabeçalho oficial MozBiscates, discriminativo de todas as transações, desempenho detalhado por especialidade e validação fiscal.
+                </span>
+                <button
+                  onClick={handleExportPDF}
+                  disabled={isExporting}
+                  className="px-4 py-1.5 rounded-xl bg-natural-accent text-white font-black text-[10px] uppercase tracking-wider shrink-0 hover:bg-natural-accent/90"
+                >
+                  Descarregar PDF do Mês
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="bg-white p-5 rounded-[2.5rem] border-2 border-natural-line shadow-premium space-y-4">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
           <div>
             <h3 className="font-black text-natural-heading text-lg tracking-tight flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-natural-accent" /> Painel de Analytics
+              <TrendingUp className="w-5 h-5 text-natural-accent" /> Painel de Analytics Geral
             </h3>
             <p className="text-[10px] text-natural-muted font-bold uppercase tracking-widest mt-0.5">
               Métricas reais de desempenho da plataforma
@@ -2254,7 +3651,7 @@ const AdminMetrics = memo(({ jobs, t }: { jobs: Job[], t: any }) => {
         </div>
 
         <div className="pt-2 border-t border-natural-surface">
-          <p className="text-[8px] font-black text-natural-muted uppercase tracking-widest mb-2">Filtrar por Especialidade</p>
+          <p className="text-[8px] font-black text-natural-muted uppercase tracking-widest mb-2">Filtrar Gráficos por Especialidade</p>
           <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
             {categories.map(cat => (
               <button
@@ -3121,6 +4518,8 @@ function MainApp() {
   const [tab, setTab] = useState<'explore' | 'jobs' | 'help'>('explore');
   const [jobs, setJobs] = useState<Job[]>([]);
   const lastJobCountRef = useRef<number>(0);
+  const previousJobStatusesRef = useRef<Record<string, string>>({});
+  const hasInitialJobsLoadedRef = useRef<boolean>(false);
   const [notification, setNotification] = useState<{title: string, body: string} | null>(null);
   const [alertCategory, setAlertCategory] = useState<string>('Todos');
   const [category, setCategory] = useState<string>('');
@@ -3131,6 +4530,8 @@ function MainApp() {
   const [balance, setBalance] = useState<number>(0);
   const [selectedProvider, setSelectedProvider] = useState<Provider | null>(null);
   const [isRecording, setIsRecording] = useState(false);
+  const [voiceFallbackOpen, setVoiceFallbackOpen] = useState(false);
+  const [voiceInputText, setVoiceInputText] = useState('');
   const [minRating, setMinRating] = useState<number>(0);
   const [onlyVerified, setOnlyVerified] = useState(false);
   const [adminView, setAdminView] = useState<'active' | 'history' | 'metrics'>('active');
@@ -3147,6 +4548,107 @@ function MainApp() {
     if (!t) return [];
     return STATIC_CATEGORIES(t);
   }, [t]);
+
+  const classifyIssueText = (text: string): string => {
+    if (!text) return '';
+    const lowerText = text.toLowerCase();
+    
+    const mapping = [
+      { label: t.catElectricista, keywords: ['electricista', 'eletricista', 'fio', 'tomada', 'luz', 'energia', 'curto', 'disjuntor', 'lâmpada', 'lampada', 'choque', 'gerador', 'fiação', 'aparelho'] },
+      { label: t.catCanalizador, keywords: ['canalizador', 'torneira', 'cano', 'vazamento', 'água', 'agua', 'infiltração', 'infiltracao', 'esgoto', 'pia', 'bacia', 'chuveiro', 'tubo', 'bomba'] },
+      { label: t.catFrio, keywords: ['frio', 'ar condicionado', 'ac', 'climatização', 'climatizacao', 'congelador', 'geleira', 'frigorífico', 'frigorifico', 'refrigeração'] },
+      { label: t.catGuarda, keywords: ['guarda', 'segurança', 'seguranca', 'vigilante', 'portaria', 'proteger', 'proteção', 'patrulha'] },
+      { label: t.catJardineiro, keywords: ['jardineiro', 'jardim', 'relva', 'grama', 'flores', 'plantas', 'podar', 'árvores', 'arvores', 'quintal'] },
+      { label: t.catAlfaiate, keywords: ['alfaiate', 'costureira', 'roupa', 'costura', 'tecido', 'remendo', 'medidas', 'vestido', 'fato', 'costurar'] },
+      { label: t.catMarceneiro, keywords: ['marceneiro', 'carpinteiro', 'madeira', 'móvel', 'movel', 'mesa', 'cadeira', 'armário', 'armario', 'porta', 'cama', 'sofá'] },
+      { label: t.catMecanico, keywords: ['mecânico', 'mecanico', 'carro', 'motor', 'pneu', 'freio', 'travão', 'travao', 'óleo', 'oleo', 'bateria', 'automóvel'] },
+      { label: t.catPintor, keywords: ['pintor', 'pintar', 'parede', 'tinta', 'cor', 'massa', 'rolo', 'pincel'] },
+      { label: t.catPedreiro, keywords: ['pedreiro', 'trolha', 'obra', 'cimento', 'tijolo', 'parede', 'reboque', 'construção', 'construcao', 'piso', 'teto', 'azulejo'] },
+      { label: t.catLimpeza, keywords: ['limpeza', 'limpar', 'vassoura', 'aspirador', 'pó', 'po', 'arrumação', 'arrumacao', 'lavagem'] },
+      { label: t.catMotorista, keywords: ['motorista', 'conduzir', 'viagem', 'transporte', 'uber', 'chapa', 'táxi', 'taxi'] },
+      { label: t.catDiarista, keywords: ['diarista', 'casa', 'doméstica', 'domestica', 'engomar', 'lavar', 'arrumar', 'limpeza doméstica'] },
+      { label: t.catCozinheiro, keywords: ['cozinheiro', 'cozinheira', 'comida', 'chef', 'refeição', 'refeicao', 'cozinha', 'almoço', 'almoco', 'jantar'] },
+      { label: t.catReparacaoTelemoveis, keywords: ['telemóvel', 'telemovel', 'celular', 'ecrã', 'ecra', 'tela', 'reparar telemovel', 'carregador', 'bateria telemovel', 'smartphone'] },
+      { label: t.catSuporteTI, keywords: ['computador', 'pc', 'ti', 'informatica', 'informática', 'software', 'vírus', 'virus', 'internet', 'wi-fi', 'wifi', 'impressora'] },
+      { label: t.catFotografo, keywords: ['fotógrafo', 'fotografo', 'foto', 'vídeo', 'video', 'câmara', 'camara', 'casamento', 'sessão', 'sessao'] },
+      { label: t.catPiscineiro, keywords: ['piscineiro', 'piscina', 'água piscina', 'limpar piscina', 'cloro'] },
+      { label: t.catLavaCar, keywords: ['lava', 'lavagem carro', 'car wash', 'aspirar carro', 'limpeza carro'] },
+      { label: t.catAntenas, keywords: ['antena', 'tv', 'televisão', 'televisao', 'dstv', 'gotv', 'sinal', 'cabo tv'] }
+    ];
+
+    for (const item of mapping) {
+      if (item.keywords.some(kw => lowerText.includes(kw))) {
+        return item.label;
+      }
+    }
+    return '';
+  };
+
+  const recognitionRef = useRef<any>(null);
+
+  const handleVoiceRecord = () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      // Gracefully open the beautiful text-input voice fallback instead of an annoying alert!
+      setVoiceFallbackOpen(true);
+      return;
+    }
+
+    if (isRecording) {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      setIsRecording(false);
+      return;
+    }
+
+    try {
+      const rec = new SpeechRecognition();
+      rec.continuous = false;
+      rec.interimResults = false;
+      rec.lang = lang === 'en' ? 'en-US' : 'pt-MZ';
+
+      rec.onstart = () => {
+        setIsRecording(true);
+      };
+
+      rec.onresult = (event: any) => {
+        const text = event.results[0][0].transcript;
+        if (text) {
+          const matchedCat = classifyIssueText(text);
+          if (matchedCat) {
+            setCategory(matchedCat);
+            alert(`🔍 ${t.categoryMatched || 'Encontrámos um profissional:'} "${matchedCat}"\n\n"${text}"`);
+          } else {
+            setCategory(text);
+            alert(`🔍 ${t.noCategoryMatched || 'Pesquisando por:'} "${text}"`);
+          }
+        }
+      };
+
+      rec.onerror = (err: any) => {
+        console.warn("Speech recognition error / blocked inside iframe, launching fallback modal:", err);
+        setIsRecording(false);
+        // Open the fallback modal immediately so they can describe the issue via text
+        setVoiceFallbackOpen(true);
+      };
+
+      rec.onend = () => {
+        setIsRecording(false);
+      };
+
+      recognitionRef.current = rec;
+      rec.start();
+    } catch (e) {
+      console.warn("Speech recognition exception, launching fallback modal:", e);
+      setIsRecording(false);
+      setVoiceFallbackOpen(true);
+    }
+  };
 
   const [installPrompt, setInstallPrompt] = useState<any>(null);
   const [isInstalled, setIsInstalled] = useState(false);
@@ -3473,7 +4975,7 @@ function MainApp() {
               if (userBairro && data.bairro && data.bairro !== userBairro) return;
 
               // Filter by providerId if it's a direct booking
-              if (data.providerId && data.providerId !== currentUser.uid) return;
+              if (data.providerId && data.providerId !== currentUser?.uid) return;
 
               const now = new Date();
               const jobTime = data.createdAt?.toDate();
@@ -3599,9 +5101,18 @@ function MainApp() {
     return () => unsubscribe();
   }, [currentUser?.uid]);
 
+  useEffect(() => {
+    if (role === 'worker' && typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
+  }, [role]);
+
   const handleRoleSelection = async (r: 'client' | 'worker' | 'admin') => {
     if (!currentUser) return;
     setRole(r);
+    if (r === 'worker' && typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
     try {
       await setDoc(doc(db, 'users', currentUser.uid), {
         uid: currentUser.uid,
@@ -3671,29 +5182,83 @@ function MainApp() {
   }, [rawProviders]);
 
   useEffect(() => {
-    if (!currentUser) return;
-    const q = query(
-      collection(db, 'jobs'),
-      where(role === 'client' ? 'clientId' : 'providerId', '==', currentUser.uid),
-      orderBy('createdAt', 'desc'),
-      limit(20)
-    );
+    if (!currentUser) {
+      setJobs([]);
+      return;
+    }
+    const q = role === 'admin'
+      ? query(
+          collection(db, 'jobs'),
+          orderBy('createdAt', 'desc'),
+          limit(300)
+        )
+      : query(
+          collection(db, 'jobs'),
+          where(role === 'client' ? 'clientId' : 'providerId', '==', currentUser.uid),
+          orderBy('createdAt', 'desc'),
+          limit(100)
+        );
     const unsubscribe = onSnapshot(q, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as any));
       
-      if (role === 'worker' && snap.docChanges().length > 0) {
-        snap.docChanges().forEach(change => {
-           if (change.type === 'added') {
-             const job = change.doc.data();
-             if (alertCategory === 'Todos' || job.category?.includes(alertCategory)) {
+      if (role === 'worker') {
+        if (!hasInitialJobsLoadedRef.current) {
+          // Initialize status tracking map for existing jobs
+          snap.docs.forEach(d => {
+            previousJobStatusesRef.current[d.id] = d.data().status;
+          });
+          hasInitialJobsLoadedRef.current = true;
+        } else {
+          snap.docChanges().forEach(change => {
+            const job = change.doc.data() as Job;
+            const jobId = change.doc.id;
+            const prevStatus = previousJobStatusesRef.current[jobId];
+
+            if (change.type === 'added') {
+              previousJobStatusesRef.current[jobId] = job.status;
+              if (alertCategory === 'Todos' || job.category?.includes(alertCategory)) {
                 setNotification({
                   title: t.notificationTitle,
                   body: `${t.notificationBody}: ${job.category} - ${job.amount} MT`
                 });
                 setTimeout(() => setNotification(null), 5000);
-             }
-           }
-        });
+              }
+            } else if (change.type === 'modified') {
+              // DETECT IF CLIENT CONFIRMED THE FINISHED SERVICE!
+              if (job.status === 'CONCLUIDO' && prevStatus && prevStatus !== 'CONCLUIDO') {
+                const fee = (job.amount || 0) * 0.1;
+                const netAmount = Math.round(job.payoutAmount ?? ((job.amount || 0) - fee));
+                const title = t.payoutCreditedTitle || "Saldo Creditado! 💰🎉";
+                const body = `${t.payoutCreditedBody || "O cliente confirmou o serviço finalizado. O seu saldo foi creditado com sucesso!"} (+${netAmount} MT • ${job.category})`;
+
+                // 1. Web Push Notification to device / browser
+                sendLocalNotification(title, {
+                  body,
+                  tag: `payout-${jobId}`,
+                  data: { jobId }
+                });
+
+                // 2. Play audible confirmation
+                try {
+                  const audio = new Audio(NOTIFICATION_SOUND);
+                  audio.volume = 0.5;
+                  audio.play().catch(() => {});
+                } catch (e) {}
+
+                // 3. In-App Notification Toast
+                setNotification({
+                  title,
+                  body
+                });
+                setTimeout(() => setNotification(null), 9000);
+
+                // 4. Update worker's local balance state
+                setBalance(prev => prev + netAmount);
+              }
+              previousJobStatusesRef.current[jobId] = job.status;
+            }
+          });
+        }
       }
       setJobs(data);
     }, (err) => handleFirestoreError(err, OperationType.LIST, 'jobs'));
@@ -3788,7 +5353,7 @@ function MainApp() {
       }, { merge: true });
       setTab('jobs');
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `users/${currentUser.uid}`);
+      handleFirestoreError(err, OperationType.WRITE, `users/${currentUser?.uid || 'unknown'}`);
     }
   };
 
@@ -3815,7 +5380,7 @@ function MainApp() {
       case 'START':
       case 'CHECK_IN':
         update.status = 'EM_CURSO';
-        update.photoBefore = data.photo || "https://picsum.photos/seed/before/400/300";
+        update.photoBefore = data.photo || `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(job.id)}&color=0c513f`;
         break;
       case 'FINISH':
       case 'CHECK_OUT':
@@ -3825,7 +5390,8 @@ function MainApp() {
       case 'CONFIRM_CLIENT':
         update.status = 'CONCLUIDO';
         const fee = job.amount * 0.1;
-        const netAmount = job.amount - fee;
+        const netAmount = Math.round(job.amount - fee);
+        update.payoutAmount = netAmount;
         const workerRef = doc(db, 'users', job.providerId);
         
         // Update provider balance and job count in Firestore in real-time
@@ -3837,9 +5403,27 @@ function MainApp() {
         // Post real-time payout message
         await addDoc(collection(db, 'jobs', job.id, 'messages'), {
           senderId: 'system',
-          text: `🎉 Serviço Confirmado pelo Cliente! O valor de ${netAmount.toFixed(0)} MT (deduzida taxa de comissão de 10%: ${fee.toFixed(0)} MT) foi creditado no seu saldo Mozbiscates com sucesso e está disponível na sua carteira.`,
+          text: `🎉 Serviço Confirmado pelo Cliente! O valor de ${netAmount} MT (deduzida taxa de comissão de 10%: ${Math.round(fee)} MT) foi creditado no seu saldo Mozbiscates com sucesso e está disponível na sua carteira.`,
           createdAt: serverTimestamp()
         }).catch(err => console.error("Error adding payout system message:", err));
+
+        // If the current active user is also the provider (testing/demo scenario)
+        if (job.providerId === currentUser?.uid) {
+          const title = t.payoutCreditedTitle || "Saldo Creditado! 💰🎉";
+          const body = `${t.payoutCreditedBody || "O cliente confirmou o serviço finalizado. O seu saldo foi creditado com sucesso!"} (+${netAmount} MT • ${job.category})`;
+          sendLocalNotification(title, {
+            body,
+            tag: `payout-${job.id}`,
+            data: { jobId: job.id }
+          });
+          setNotification({ title, body });
+          try {
+            const audio = new Audio(NOTIFICATION_SOUND);
+            audio.volume = 0.5;
+            audio.play().catch(() => {});
+          } catch (e) {}
+          setBalance(prev => prev + netAmount);
+        }
         break;
       case 'VALIDATE_PAYMENT':
         update.status = 'PAGO';
@@ -4026,6 +5610,73 @@ function MainApp() {
               </div>
             </motion.div>
           )}
+
+          {voiceFallbackOpen && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[250] flex items-center justify-center p-6 animate-in fade-in duration-200">
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className="bg-white text-natural-heading w-full max-w-sm rounded-[2.5rem] shadow-[0_25px_60px_-15px_rgba(0,0,0,0.4)] border-4 border-white overflow-hidden font-sans text-left relative"
+              >
+                <button 
+                  onClick={() => {
+                    setVoiceFallbackOpen(false);
+                    setVoiceInputText('');
+                  }}
+                  className="absolute top-5 right-5 w-8 h-8 rounded-full bg-natural-surface flex items-center justify-center text-natural-muted hover:bg-natural-line/30 transition-all active:scale-90"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+
+                <div className="p-6">
+                  <div className="text-[10px] font-black text-natural-accent mb-3 tracking-[0.2em] uppercase flex items-center gap-1.5">
+                    <Mic className="w-3.5 h-3.5 animate-pulse" />
+                    <span>{t.voiceFallbackTitle}</span>
+                  </div>
+
+                  <h3 className="text-lg font-black italic tracking-tight mb-2 leading-none">
+                    {t.voiceFallbackTitle}
+                  </h3>
+                  <p className="text-[11px] text-natural-muted font-bold leading-relaxed mb-4">
+                    {t.voiceFallbackDesc}
+                  </p>
+
+                  <div className="bg-natural-surface p-4 rounded-2xl border border-natural-line mb-4">
+                    <textarea
+                      rows={3}
+                      value={voiceInputText}
+                      onChange={(e) => setVoiceInputText(e.target.value)}
+                      placeholder={t.voiceFallbackPlaceholder}
+                      className="w-full bg-transparent border-none text-xs font-bold text-natural-heading placeholder-natural-muted/65 focus:outline-none focus:ring-0 resize-none font-sans"
+                      autoFocus
+                    />
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      if (!voiceInputText.trim()) return;
+                      const matchedCat = classifyIssueText(voiceInputText);
+                      if (matchedCat) {
+                        setCategory(matchedCat);
+                        alert(`🔍 ${t.categoryMatched} "${matchedCat}"`);
+                      } else {
+                        setCategory(voiceInputText);
+                        alert(`🔍 ${t.noCategoryMatched} "${voiceInputText}"`);
+                      }
+                      setVoiceFallbackOpen(false);
+                      setVoiceInputText('');
+                    }}
+                    disabled={!voiceInputText.trim()}
+                    className="w-full bg-natural-success text-white py-4 rounded-2xl font-black uppercase tracking-widest text-[11px] shadow-lg hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:scale-100 disabled:pointer-events-none"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    <span>{t.voiceFallbackButton}</span>
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
         </AnimatePresence>
 
         <nav className="sticky top-0 z-50 bg-white shadow-sm border-b border-natural-line px-5 py-4 flex items-center justify-between">
@@ -4164,8 +5815,12 @@ function MainApp() {
                    <div className="relative z-10">
                     <h3 className="text-2xl font-black mb-1">{t.garanteDirecto}</h3>
                     <p className="text-green-50 text-xs mb-6 font-medium opacity-90 leading-tight">{t.garanteDesc}</p>
-                    <button onMouseDown={() => setIsRecording(true)} onMouseUp={() => setIsRecording(false)} className={`w-full py-5 rounded-2xl font-black transition-all flex items-center justify-center gap-3 shadow-xl ${isRecording ? 'bg-red-500 text-white scale-95' : 'bg-white text-natural-success hover:scale-[1.02]'}`}>
-                      <Mic className={`w-6 h-6 ${isRecording ? 'animate-pulse' : ''}`} /> <span className="uppercase tracking-widest text-sm">{isRecording ? t.recording : t.recordAudio}</span>
+                    <button 
+                      onClick={handleVoiceRecord} 
+                      className={`w-full py-5 rounded-2xl font-black transition-all flex items-center justify-center gap-3 shadow-xl ${isRecording ? 'bg-red-500 text-white scale-95' : 'bg-white text-natural-success hover:scale-[1.02]'}`}
+                    >
+                      <Mic className={`w-6 h-6 ${isRecording ? 'animate-pulse' : ''}`} /> 
+                      <span className="uppercase tracking-widest text-sm">{isRecording ? (t.listening || t.recording) : t.recordAudio}</span>
                     </button>
                    </div>
                    <div className="absolute -right-16 -bottom-16 w-56 h-56 bg-white/10 rounded-full blur-3xl group-hover:scale-125 transition-transform duration-1000" />
@@ -4286,6 +5941,7 @@ function MainApp() {
 
                  </div>
                   {role === 'worker' && <WorkerWallet t={t} balance={balance} userData={userData} db={db} currentUser={currentUser} />}
+                  {role === 'worker' && <WorkerEarningsChart jobs={jobs} userData={userData} balance={balance} t={t} />}
                   {role === 'worker' && <CommunityRules t={t} />}
                   {role === 'admin' && <WithdrawalManagement jobs={jobs} onAction={handleJobAction} t={t} />}
 

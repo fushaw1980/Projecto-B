@@ -7,6 +7,11 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // --- Connectivity Ping Test ---
+    match /_connection_test_/{docId} {
+      allow read: if true;
+    }
+
     // --- Helpers ---
     function isSignedIn() {
       return request.auth != null;
@@ -33,7 +38,7 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isSignedIn() && isEmailVerified() && (request.auth.token.email == 'fushawshaw@gmail.com' || request.auth.token.email == 'wanderj419@gmail.com' || request.auth.token.email == 'mozbiscates@gmail.com');
+      return isSignedIn() && (request.auth.token.email == 'fushawshaw@gmail.com' || request.auth.token.email == 'wanderj419@gmail.com' || request.auth.token.email == 'mozbiscates@gmail.com');
     }
 
     // --- User Validation ---
@@ -51,11 +56,17 @@ service cloud.firestore {
       allow get: if isSignedIn();
       allow list: if isSignedIn() && (resource.data.role == 'worker' || resource.data.uid == request.auth.uid || isAdmin());
       allow create: if isOwner(userId) && isValidUser(incoming()) && (incoming().role != 'admin' || isAdmin());
-      allow update: if isOwner(userId) && isValidUser(incoming()) && 
-                    incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'role', 'category', 'bairro', 'phone', 'photo', 'level', 'jobs', 'verified', 'updatedAt']) &&
-                    // Only Admin can verify or change roles to admin
-                    (incoming().verified == existing().verified || isAdmin()) &&
-                    (incoming().role == existing().role || incoming().role != 'admin' || isAdmin());
+      allow update: if (
+        isOwner(userId) && isValidUser(incoming()) && 
+        incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'role', 'category', 'bairro', 'phone', 'photo', 'level', 'jobs', 'balance', 'verified', 'updatedAt']) &&
+        (incoming().verified == existing().verified || isAdmin()) &&
+        (incoming().role == existing().role || incoming().role != 'admin' || isAdmin())
+      ) || (
+        // Allow updating balance & jobs upon client service confirmation or settlement
+        isSignedIn() && incoming().diff(existing()).affectedKeys().hasOnly(['jobs', 'balance'])
+      ) || (
+        isAdmin()
+      );
       
       match /reviews/{reviewId} {
         allow read: if true;
@@ -73,28 +84,37 @@ service cloud.firestore {
     }
 
     match /jobs/{jobId} {
-      allow get: if isSignedIn() && (resource.data.clientId == request.auth.uid || resource.data.providerId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (resource.data.clientId == request.auth.uid || resource.data.providerId == request.auth.uid || isAdmin());
+      allow get: if isSignedIn();
+      allow list: if isSignedIn() && (
+        resource.data.clientId == request.auth.uid || 
+        resource.data.providerId == request.auth.uid || 
+        resource.data.status in ['AGUARDANDO_DEPOSITO', 'VALIDACAO_PENDENTE', 'PAGO'] || 
+        isAdmin()
+      );
       allow create: if isSignedIn() && isValidJob(incoming());
       allow update: if isSignedIn() && (
         // Client actions
         (existing().clientId == request.auth.uid && (
-          (incoming().status == 'VALIDACAO_PENDENTE' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'transactionId', 'updatedAt'])) ||
-          (incoming().status == 'CONCLUIDO' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+          (incoming().status in ['VALIDACAO_PENDENTE', 'PAGO'] && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'transactionId', 'updatedAt'])) ||
+          (incoming().status == 'CONCLUIDO' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'payoutAmount', 'updatedAt']))
         )) ||
         // Worker actions
         (existing().providerId == request.auth.uid && (
           (incoming().status == 'EM_CURSO' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'photoBefore', 'updatedAt'])) ||
           (incoming().status == 'FINALIZADO' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'photoAfter', 'updatedAt'])) ||
-          (incoming().diff(existing()).affectedKeys().hasOnly(['panicAlert', 'updatedAt']))
+          (incoming().diff(existing()).affectedKeys().hasOnly(['panicAlert', 'panicLocation', 'updatedAt']))
         )) ||
         // Admin actions
-        (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
-      ) && incoming().updatedAt == request.time;
+        (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'payoutTransactionId', 'updatedAt']))
+      );
 
       match /messages/{messageId} {
-        allow read: if isSignedIn() && (get(/databases/$(database)/documents/jobs/$(jobId)).data.clientId == request.auth.uid || get(/databases/$(database)/documents/jobs/$(jobId)).data.providerId == request.auth.uid);
-        allow create: if isSignedIn() && incoming().senderId == request.auth.uid && incoming().createdAt == request.time;
+        allow read: if isSignedIn() && (
+          get(/databases/$(database)/documents/jobs/$(jobId)).data.clientId == request.auth.uid || 
+          get(/databases/$(database)/documents/jobs/$(jobId)).data.providerId == request.auth.uid ||
+          isAdmin()
+        );
+        allow create: if isSignedIn() && (incoming().senderId in [request.auth.uid, 'system']);
       }
     }
   }
