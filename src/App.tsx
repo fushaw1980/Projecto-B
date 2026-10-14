@@ -55,11 +55,24 @@ import {
   AlarmClock,
   QrCode,
   FileText,
-  FileDown
+  FileDown,
+  ShieldAlert,
+  Volume2,
+  VolumeX,
+  PhoneCall,
+  ShieldCheck,
+  Clock,
+  Navigation
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { motion, AnimatePresence } from 'motion/react';
 import { Html5Qrcode } from 'html5-qrcode';
+import { compressImage } from './lib/imageOptimizer';
+import { ALL_SPECIALTIES, FREQUENT_CATEGORIES } from './data/specialties';
+import { ClientSecurityProfileModal } from './components/ClientSecurityProfileModal';
+import { EmergencyModal } from './components/EmergencyModal';
+import { AdminEmergencyMonitor } from './components/AdminEmergencyMonitor';
+import { calculateHaversineDistanceKm, estimateTravelTime, getProviderCoordinates } from './lib/geoUtils';
 import {
   ResponsiveContainer,
   AreaChart,
@@ -135,33 +148,36 @@ const shortenUrl = async (url: string) => {
   return url;
 };
 
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// Custom SVG Markers for a professional look
-const createCustomMarker = (type: 'job' | 'provider' | 'user') => {
-  const colors = {
-    job: '#10B981',
-    provider: '#E65100',
-    user: '#3B82F6'
-  };
-  
-  return L.divIcon({
-    className: 'custom-div-icon',
-    html: `
-      <div class="relative flex items-center justify-center">
-        <div class="absolute w-8 h-8 rounded-full blur-[2px] opacity-20" style="background-color: ${colors[type]}"></div>
-        <div class="relative w-6 h-6 rounded-full border-2 border-white shadow-sm flex items-center justify-center" style="background-color: ${colors[type]}">
-          <div class="w-1.5 h-1.5 rounded-full bg-white"></div>
+// Cached Leaflet SVG Markers to prevent recreating DOM nodes on every render loop
+const MARKER_ICONS: Record<string, L.DivIcon> = {};
+const getCustomMarker = (type: 'job' | 'provider' | 'user') => {
+  if (!MARKER_ICONS[type]) {
+    const colors = {
+      job: '#10B981',
+      provider: '#E65100',
+      user: '#3B82F6'
+    };
+    MARKER_ICONS[type] = L.divIcon({
+      className: 'custom-div-icon',
+      html: `
+        <div class="relative flex items-center justify-center">
+          <div class="absolute w-8 h-8 rounded-full blur-[2px] opacity-20" style="background-color: ${colors[type]}"></div>
+          <div class="relative w-6 h-6 rounded-full border-2 border-white shadow-sm flex items-center justify-center" style="background-color: ${colors[type]}">
+            <div class="w-1.5 h-1.5 rounded-full bg-white"></div>
+          </div>
+          <div class="absolute -bottom-1 w-1.5 h-1.5 rotate-45" style="background-color: ${colors[type]}"></div>
         </div>
-        <div class="absolute -bottom-1 w-1.5 h-1.5 rotate-45" style="background-color: ${colors[type]}"></div>
-      </div>
-    `,
-    iconSize: [32, 32],
-    iconAnchor: [16, 24],
-    popupAnchor: [0, -20]
-  });
+      `,
+      iconSize: [32, 32],
+      iconAnchor: [16, 24],
+      popupAnchor: [0, -20]
+    });
+  }
+  return MARKER_ICONS[type];
 };
 
 const ChangeView = ({ center }: { center: [number, number] }) => {
@@ -229,13 +245,42 @@ const sendLocalNotification = (title: string, options: NotificationOptions & { d
   } catch(e) {}
 };
 // --- Map Components ---
-const MapView = ({ jobs = [], providers = [], userPos, t }: { jobs?: Job[], providers?: Provider[], userPos: [number, number], t: any }) => {
+interface MapViewProps {
+  jobs?: Job[];
+  providers?: Provider[];
+  userPos: [number, number];
+  t: any;
+  selectedProvider?: Provider | null;
+  onSelectProvider?: (p: Provider) => void;
+}
+
+const MapView = memo(({ 
+  jobs = [], 
+  providers = [], 
+  userPos, 
+  t, 
+  selectedProvider,
+  onSelectProvider 
+}: MapViewProps) => {
   const [mapType, setMapType] = useState('streets');
+  const [localSelectedProvider, setLocalSelectedProvider] = useState<Provider | null>(null);
+
+  const activeTargetProvider = selectedProvider || localSelectedProvider;
+
+  // Active target calculations using Haversine
+  const activeTargetData = useMemo(() => {
+    if (!activeTargetProvider) return null;
+    const coords = getProviderCoordinates(activeTargetProvider.id, userPos);
+    const distanceKm = calculateHaversineDistanceKm(userPos, coords);
+    const travel = estimateTravelTime(distanceKm);
+    return { coords, distanceKm, travel };
+  }, [activeTargetProvider, userPos]);
 
   return (
     <div className="w-full h-[65vh] rounded-[3rem] overflow-hidden border-4 border-white shadow-premium relative z-10 group mt-4">
-      <div className="absolute top-6 left-6 z-[1000] flex flex-col gap-2">
-        <div className="bg-white/95 backdrop-blur-md px-4 py-2 rounded-2xl border border-natural-line/50 shadow-premium flex items-center gap-2 pointer-events-none transition-transform group-hover:scale-105">
+      {/* Top Map Badge */}
+      <div className="absolute top-6 left-6 z-[1000] flex flex-col gap-2 pointer-events-none">
+        <div className="bg-white/95 backdrop-blur-md px-4 py-2 rounded-2xl border border-natural-line/50 shadow-premium flex items-center gap-2 transition-transform group-hover:scale-105">
           <Sparkles className="w-4 h-4 text-natural-accent" />
           <span className="text-[10px] font-black uppercase tracking-widest text-natural-heading">Explorar arredores</span>
         </div>
@@ -243,6 +288,55 @@ const MapView = ({ jobs = [], providers = [], userPos, t }: { jobs?: Job[], prov
           {providers.length} {t.verified || 'Verificados'}
         </div>
       </div>
+
+      {/* Floating Travel Time Estimation HUD over Map */}
+      {activeTargetProvider && activeTargetData && (
+        <div className="absolute bottom-4 left-4 right-4 z-[1000] bg-white/95 backdrop-blur-md rounded-2xl border-2 border-natural-accent shadow-2xl p-3 flex items-center justify-between gap-3 animate-in fade-in slide-in-from-bottom duration-300">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-orange-100 flex items-center justify-center text-natural-accent shrink-0">
+              <Navigation className="w-5 h-5 animate-pulse" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <p className="text-[11px] font-black uppercase text-natural-heading tracking-tight truncate">
+                  {activeTargetProvider.name}
+                </p>
+                <span className="bg-orange-50 text-natural-accent font-black text-[9px] px-1.5 py-0.5 rounded border border-orange-200 shrink-0">
+                  {activeTargetData.travel.formattedDistance} (Haversine)
+                </span>
+              </div>
+              <div className="flex items-center gap-2 mt-0.5 text-[11px] font-black text-natural-heading">
+                <span className="flex items-center gap-1 text-slate-800" title="Carro ou Chapa urbano">
+                  🚗 ~{activeTargetData.travel.carMinutes} min
+                </span>
+                <span className="text-slate-300">•</span>
+                <span className="flex items-center gap-1 text-slate-800" title="Txopela ou Moto">
+                  🛵 ~{activeTargetData.travel.motoMinutes} min
+                </span>
+                <span className="text-slate-300">•</span>
+                <span className="flex items-center gap-1 text-slate-800" title="Caminhada a pé">
+                  🚶 ~{activeTargetData.travel.walkingMinutes} min
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              onClick={() => setLocalSelectedProvider(null)}
+              className="p-2 text-natural-muted hover:text-black rounded-lg text-xs"
+              title="Limpar seleção"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => onSelectProvider?.(activeTargetProvider)}
+              className="px-3.5 py-2 bg-natural-accent text-white rounded-xl text-[10px] font-black uppercase tracking-wider shadow-sm hover:scale-105 active:scale-95 transition-transform"
+            >
+              Ver Perfil
+            </button>
+          </div>
+        </div>
+      )}
       
       <MapContainer center={userPos} zoom={13} scrollWheelZoom={false} style={{ height: '100%', width: '100%' }} zoomControl={false}>
         {mapType === 'streets' ? (
@@ -259,65 +353,95 @@ const MapView = ({ jobs = [], providers = [], userPos, t }: { jobs?: Job[], prov
         <ChangeView center={userPos} />
         <MapControls userPos={userPos} setMapType={setMapType} mapType={mapType} />
         
-        {providers.map(p => {
-          // Calculate stable seeded coordinates for this provider based on their ID to prevent jumping
-          let hash1 = 0;
-          for (let i = 0; i < p.id.length; i++) {
-            hash1 = p.id.charCodeAt(i) + ((hash1 << 5) - hash1);
-          }
-          const randLat = Math.abs(Math.sin(hash1) * 10000) % 1;
-          const randLng = Math.abs(Math.cos(hash1) * 10000) % 1;
-          
-          const providerLat = userPos[0] + (randLat - 0.5) * 0.012;
-          const providerLng = userPos[1] + (randLng - 0.5) * 0.012;
-          const providerPos: [number, number] = [providerLat, providerLng];
+        {/* Polyline line connecting user to selected provider */}
+        {activeTargetData && (
+          <Polyline 
+            positions={[userPos, activeTargetData.coords]} 
+            pathOptions={{ color: '#E65100', weight: 4, dashArray: '6, 8', opacity: 0.9 }} 
+          />
+        )}
 
-          // Calculate Haversine distance in km from userPos to providerPos
-          const R = 6371; // Earth's radius in km
-          const dLat = (providerLat - userPos[0]) * Math.PI / 180;
-          const dLon = (providerLng - userPos[1]) * Math.PI / 180;
-          const a = 
-            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-            Math.cos(userPos[0] * Math.PI / 180) * Math.cos(providerLat * Math.PI / 180) * 
-            Math.sin(dLon / 2) * Math.sin(dLon / 2);
-          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-          const distance = R * c;
+        {providers.map(p => {
+          const providerPos = getProviderCoordinates(p.id, userPos);
+          const distance = calculateHaversineDistanceKm(userPos, providerPos);
+          const travel = estimateTravelTime(distance);
+          const isCurrentActive = activeTargetProvider?.id === p.id;
 
           return (
             <Marker 
               key={p.id} 
               position={providerPos} 
-              icon={createCustomMarker('provider')}
+              icon={getCustomMarker('provider')}
+              eventHandlers={{
+                click: () => {
+                  setLocalSelectedProvider(p);
+                }
+              }}
             >
               <Popup className="premium-popup">
-                <div className="p-3 min-w-[160px]">
-                  <div className="flex items-center gap-3 mb-3 pb-3 border-b border-natural-line/30">
-                    <div className="w-10 h-10 rounded-2xl bg-natural-surface border border-natural-line overflow-hidden shadow-sm">
+                <div className="p-3 min-w-[200px]">
+                  <div className="flex items-center gap-3 mb-2.5 pb-2.5 border-b border-natural-line/30">
+                    <div className="w-10 h-10 rounded-2xl bg-natural-surface border border-natural-line overflow-hidden shadow-sm shrink-0">
                       <img src={p.photo} alt={p.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                     </div>
-                    <div>
-                      <p className="font-black text-sm text-natural-heading leading-none mb-1">{p.name}</p>
-                      <div className="flex items-center gap-1">
+                    <div className="min-w-0">
+                      <p className="font-black text-sm text-natural-heading leading-tight truncate">{p.name}</p>
+                      <div className="flex items-center gap-1 mt-0.5">
                         <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
                         <span className="text-xs font-black text-natural-heading">{p.rating}</span>
                         <span className="text-[9px] font-bold text-natural-muted">({p.jobs} jobs)</span>
                       </div>
                     </div>
                   </div>
-                  <div className="space-y-2">
+
+                  <div className="space-y-1.5 mb-2.5">
                     <div className="flex items-center gap-2">
-                      <Wrench className="w-3 h-3 text-natural-accent" />
+                      <Wrench className="w-3 h-3 text-natural-accent shrink-0" />
                       <p className="font-black text-[10px] text-natural-accent uppercase tracking-wider">{p.category}</p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <MapPin className="w-3 h-3 text-natural-muted" />
+                      <MapPin className="w-3 h-3 text-natural-muted shrink-0" />
                       <p className="text-[10px] text-natural-muted font-bold">
-                        {p.bairro} ({distance >= 1 ? `${distance.toFixed(1)} km` : `${(distance * 1000).toFixed(0)} m`})
+                        {p.bairro}
                       </p>
                     </div>
                   </div>
-                  <button className="w-full mt-3 bg-natural-accent text-white py-2 rounded-xl text-[10px] font-black uppercase tracking-tighter shadow-sm hover:scale-105 active:scale-95 transition-all">
-                    Ver Perfil
+
+                  {/* Estimativa de Deslocação Haversine */}
+                  <div className="p-2.5 bg-orange-50 border border-orange-200 rounded-2xl mb-2.5">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[9px] font-black uppercase text-orange-900 flex items-center gap-1 tracking-wider">
+                        <Clock className="w-3 h-3 text-natural-accent shrink-0" /> Tempo Estimado
+                      </span>
+                      <span className="text-[9px] font-black text-natural-accent font-mono bg-white px-1.5 py-0.5 rounded border border-orange-200">
+                        {travel.formattedDistance}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1 text-center mt-1.5">
+                      <div className="bg-white p-1 rounded-xl border border-orange-100 shadow-2xs">
+                        <span className="text-[8px] font-bold text-slate-500 block">🚗 Carro</span>
+                        <span className="text-[10px] font-black text-natural-heading leading-none">~{travel.carMinutes}m</span>
+                      </div>
+                      <div className="bg-white p-1 rounded-xl border border-orange-100 shadow-2xs">
+                        <span className="text-[8px] font-bold text-slate-500 block">🛵 Txopela</span>
+                        <span className="text-[10px] font-black text-natural-heading leading-none">~{travel.motoMinutes}m</span>
+                      </div>
+                      <div className="bg-white p-1 rounded-xl border border-orange-100 shadow-2xs">
+                        <span className="text-[8px] font-bold text-slate-500 block">🚶 A pé</span>
+                        <span className="text-[10px] font-black text-natural-heading leading-none">~{travel.walkingMinutes}m</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button 
+                    onClick={() => {
+                      setLocalSelectedProvider(p);
+                      onSelectProvider?.(p);
+                    }}
+                    className="w-full bg-natural-accent text-white py-2.5 rounded-xl text-[10px] font-black uppercase tracking-wider shadow-sm hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-1.5"
+                  >
+                    <span>Ver Perfil e Contratar</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
                   </button>
                 </div>
               </Popup>
@@ -326,7 +450,7 @@ const MapView = ({ jobs = [], providers = [], userPos, t }: { jobs?: Job[], prov
         })}
 
         {jobs.filter(j => j.lat && j.lng).map(job => (
-          <Marker key={job.id} position={[job.lat!, job.lng!]} icon={createCustomMarker('job')}>
+          <Marker key={job.id} position={[job.lat!, job.lng!]} icon={getCustomMarker('job')}>
             <Popup className="premium-popup">
               <div className="p-3 min-w-[140px]">
                 <div className="flex items-center gap-2 mb-2">
@@ -343,7 +467,7 @@ const MapView = ({ jobs = [], providers = [], userPos, t }: { jobs?: Job[], prov
           </Marker>
         ))}
         
-        <Marker position={userPos} icon={createCustomMarker('user')}>
+        <Marker position={userPos} icon={getCustomMarker('user')}>
           <Popup className="premium-popup">
             <div className="p-2 space-y-1">
               <p className="text-[10px] font-black uppercase tracking-[min(3px,0.2em)] text-blue-600 text-center">Você está aqui</p>
@@ -355,7 +479,7 @@ const MapView = ({ jobs = [], providers = [], userPos, t }: { jobs?: Job[], prov
       </MapContainer>
     </div>
   );
-};
+});
 
 interface Provider {
   id: string;
@@ -2261,7 +2385,7 @@ const JobReminder = memo(({ jobId, jobTitle, t }: { jobId: string, jobTitle: str
   );
 });
 
-const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt' }: { job: Job, role: string, onAction: (j: Job, a: string, d?: any) => void, t: any, currentUser: any, lang?: string }) => {
+const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt', onPanic }: { job: Job, role: string, onAction: (j: Job, a: string, d?: any) => void, t: any, currentUser: any, lang?: string, onPanic?: (job: Job) => void }) => {
   const [txId, setTxId] = useState('');
   const [showChat, setShowChat] = useState(false);
   const [showReview, setShowReview] = useState(false);
@@ -2279,8 +2403,10 @@ const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt' }: { jo
   const [showQrScanner, setShowQrScanner] = useState(false);
 
   const sendPanic = () => {
-    if (confirm("Deseja enviar um Alerta de Ajuda ao Garante? Sua localização será partilhada.")) {
-      onAction(job, 'PANIC', { location: 'Location simulation' });
+    if (onPanic) {
+      onPanic(job);
+    } else {
+      onAction(job, 'PANIC', { location: 'Localização de emergência partilhada' });
     }
   };
 
@@ -2351,10 +2477,14 @@ const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt' }: { jo
 
       {role === 'worker' && <FeeBreakdown amount={job.amount} t={t} />}
 
-      {/* --- Panic Button (Worker only) --- */}
-      {role === 'worker' && job.status === 'EM_CURSO' && (
-        <button onClick={sendPanic} className="w-full bg-red-50 text-red-600 border-2 border-red-200 font-black py-3 rounded-2xl flex items-center justify-center gap-2 mb-4 hover:bg-red-100 transition-colors">
-          <Heart className="w-4 h-4 fill-red-600" /> {t.helpButton}
+      {/* --- Panic Button / Alarme SOS Anti-Crime (Para Ambos os Lados) --- */}
+      {(job.status === 'EM_CURSO' || job.status === 'PAGO') && (
+        <button 
+          onClick={sendPanic} 
+          className="w-full bg-red-50 text-red-600 border-2 border-red-200 hover:border-red-400 font-black py-3 rounded-2xl flex items-center justify-center gap-2 mb-4 hover:bg-red-100 transition-colors shadow-sm active:scale-98"
+        >
+          <ShieldAlert className="w-4 h-4 text-red-600 animate-pulse" />
+          <span className="text-xs uppercase tracking-wider">🚨 Alarme SOS / Emergência Anti-Crime</span>
         </button>
       )}
 
@@ -4098,31 +4228,58 @@ const RoleSelection = ({ onSelect, onBack, lang, setLang, t, currentUser, isAdmi
   );
 };
 
-const WorkerProfileForm = ({ onSave, t }: { onSave: (data: { name: string, category: string, photo: string, biPhoto: string, biSelfie: string, verified: boolean, portfolio: string[] }) => void, t: any }) => {
+const WorkerProfileForm = ({ onSave, t }: { onSave: (data: { name: string, category: string, photo: string, biPhoto: string, biSelfie: string, verified: boolean, portfolio: string[], nuit?: string, emergencyContactName?: string, emergencyContactPhone?: string, specialty?: string }) => void, t: any }) => {
   const [name, setName] = useState('');
-  const [category, setCategory] = useState('Serviços Gerais');
+  const [category, setCategory] = useState('Electricista Profissional');
+  const [nuit, setNuit] = useState('');
+  const [emergencyContactName, setEmergencyContactName] = useState('');
+  const [emergencyContactPhone, setEmergencyContactPhone] = useState('');
+  const [specialtySearch, setSpecialtySearch] = useState('');
   const [photo, setPhoto] = useState<string | null>(null);
   const [biPhoto, setBiPhoto] = useState<string | null>(null);
   const [biSelfie, setBiSelfie] = useState<string | null>(null);
   const [portfolio, setPortfolio] = useState<string[]>([]);
   const [isValidating, setIsValidating] = useState(false);
+  const [isCompressing, setIsCompressing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleCapture = (callback: (res: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
+  const filteredSpecialties = useMemo(() => {
+    if (!specialtySearch.trim()) return [];
+    const q = specialtySearch.toLowerCase();
+    return ALL_SPECIALTIES.filter(s => 
+      s.name.toLowerCase().includes(q) || 
+      s.categoryGroup.toLowerCase().includes(q)
+    );
+  }, [specialtySearch]);
+
+  const handleCapture = (callback: (res: string) => void) => async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => callback(reader.result as string);
-      reader.readAsDataURL(file);
+      setIsCompressing(true);
+      setError(null);
+      try {
+        const compressed = await compressImage(file, 800, 800, 0.72);
+        callback(compressed);
+      } catch (err) {
+        setError('Erro ao processar imagem. Tente uma foto menor.');
+      } finally {
+        setIsCompressing(false);
+      }
     }
   };
 
-  const addPortfolio = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const addPortfolio = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file && portfolio.length < 3) {
-      const reader = new FileReader();
-      reader.onloadend = () => setPortfolio([...portfolio, reader.result as string]);
-      reader.readAsDataURL(file);
+      setIsCompressing(true);
+      try {
+        const compressed = await compressImage(file, 800, 800, 0.7);
+        setPortfolio(prev => [...prev, compressed]);
+      } catch (err) {
+        setError('Erro ao comprimir foto do portfólio.');
+      } finally {
+        setIsCompressing(false);
+      }
     }
   };
 
@@ -4149,7 +4306,11 @@ const WorkerProfileForm = ({ onSave, t }: { onSave: (data: { name: string, categ
           biPhoto, 
           biSelfie, 
           verified: true,
-          portfolio
+          portfolio,
+          nuit: nuit.trim() || undefined,
+          emergencyContactName: emergencyContactName.trim() || undefined,
+          emergencyContactPhone: emergencyContactPhone.trim() || undefined,
+          specialty: category
         });
       } else {
         setError(analysis.reason || t.verificationError);
@@ -4163,13 +4324,16 @@ const WorkerProfileForm = ({ onSave, t }: { onSave: (data: { name: string, categ
 
   return (
     <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="p-6 pb-32">
-      <div className="mb-10 text-center">
-         <h2 className="text-4xl font-black text-natural-heading mb-3 tracking-tighter italic">{(String(t.bePro || '')).split(' ').map((w: string, i: number) => i === 2 ? <span key={i} className="text-natural-accent underline">{w}</span> : <Fragment key={i}>{w} </Fragment>)}</h2>
-         <p className="text-natural-muted font-bold text-sm leading-tight px-4 opacity-80">{t.securityMax}</p>
+      <div className="mb-8 text-center">
+         <h2 className="text-3xl font-black text-natural-heading mb-2 tracking-tight italic">
+           {(String(t.bePro || '')).split(' ').map((w: string, i: number) => i === 2 ? <span key={i} className="text-natural-accent underline">{w}</span> : <Fragment key={i}>{w} </Fragment>)}
+         </h2>
+         <p className="text-natural-muted font-bold text-xs leading-tight px-4 opacity-80">{t.securityMax}</p>
       </div>
+
       <div className="space-y-6 max-w-sm mx-auto">
         {/* Photo Upload */}
-        <div className="flex flex-col items-center mb-6">
+        <div className="flex flex-col items-center mb-4">
           <label className="relative cursor-pointer group">
             <div className="w-24 h-24 rounded-full bg-natural-surface border-4 border-white shadow-xl overflow-hidden flex items-center justify-center relative">
               {photo ? (
@@ -4186,48 +4350,147 @@ const WorkerProfileForm = ({ onSave, t }: { onSave: (data: { name: string, categ
           <p className="text-[10px] font-black uppercase text-natural-muted tracking-widest mt-2">{t.profile}</p>
         </div>
 
-        <div className="space-y-2">
+        {/* Dados Básicos */}
+        <div className="space-y-3">
           <label className="text-[10px] font-black uppercase text-natural-muted tracking-[0.25em] ml-2">{t.basicData}</label>
-          <div className="bg-white border-2 border-natural-line p-5 rounded-[1.5rem] flex items-center gap-4 shadow-sm focus-within:border-natural-accent transition-colors">
-            <User className="text-natural-accent w-6 h-6" />
+          
+          <div className="bg-white border-2 border-natural-line p-4 rounded-2xl flex items-center gap-3 shadow-sm focus-within:border-natural-accent transition-colors">
+            <User className="text-natural-accent w-5 h-5 shrink-0" />
             <input 
               type="text" 
               placeholder={t.fullName} 
-              className="w-full outline-none font-black text-natural-heading bg-transparent"
+              className="w-full outline-none font-bold text-sm text-natural-heading bg-transparent"
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
           </div>
-          <div className="bg-white border-2 border-natural-line p-5 rounded-[1.5rem] shadow-sm">
-            <select 
-              className="w-full outline-none font-black text-natural-heading bg-transparent appearance-none"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-            >
-              <option value="Electricista Profissional">{t.catElectricista}</option>
-              <option value="Canalizador">{t.catCanalizador}</option>
-              <option value="Mecânico de Auto">{t.catMecanico}</option>
-              <option value="Pedreiro / Pintor">{t.catPedreiro}</option>
-              <option value="Limpeza Profissional">{t.catLimpeza}</option>
-              <option value="Motorista Particular">{t.catMotorista}</option>
-              <option value="Diarista / Doméstica">{t.catDiarista}</option>
-              <option value="Cozinheiro(a) a Domicílio">{t.catCozinheiro}</option>
-              <option value="Manicure / Pedicure">{t.catManicure}</option>
-              <option value="Esteticista / Beleza">{t.catEsteticista}</option>
-              <option value="Reparação de Telemóveis">{t.catReparacaoTelemoveis}</option>
-              <option value="Suporte Técnico de TI">{t.catSuporteTI}</option>
-              <option value="Fotógrafo(a)">{t.catFotografo}</option>
-              <option value="Organizador(a) de Eventos">{t.catOrganizadorEventos}</option>
-              <option value="Babysitter">{t.catBabysitter}</option>
-              <option value="Serviços Gerais">{t.catGerais}</option>
-            </select>
+
+          {/* Campo NUIT (Opcional) */}
+          <div className="space-y-1">
+            <div className="flex justify-between items-center px-2">
+              <label className="text-[10px] font-black uppercase text-natural-muted tracking-[0.2em]">NUIT</label>
+              <span className="text-[9px] font-bold text-natural-muted italic">Opcional</span>
+            </div>
+            <div className="bg-white border-2 border-natural-line p-4 rounded-2xl flex items-center gap-3 shadow-sm focus-within:border-natural-accent transition-colors">
+              <FileText className="text-natural-accent w-5 h-5 shrink-0" />
+              <input 
+                type="text" 
+                placeholder="Número de NUIT (ex: 123456789)" 
+                className="w-full outline-none font-bold text-sm text-natural-heading bg-transparent"
+                value={nuit}
+                onChange={(e) => setNuit(e.target.value)}
+              />
+            </div>
+            <p className="text-[9px] text-natural-muted px-2">Adicionar o NUIT confere maior credibilidade tributária e profissional a clientes.</p>
+          </div>
+        </div>
+
+        {/* Seleção e Pesquisa de Especialização */}
+        <div className="space-y-3 bg-white border-2 border-natural-line p-4 rounded-2xl shadow-sm">
+          <div className="flex items-center justify-between">
+            <label className="text-[10px] font-black uppercase text-natural-muted tracking-[0.2em]">Especialidade / Ofício</label>
+            <span className="text-[9px] font-black text-natural-accent bg-orange-50 px-2 py-0.5 rounded-full border border-orange-200">
+              {category}
+            </span>
+          </div>
+
+          {/* Categorias mais frequentadas em destaque */}
+          <div>
+            <span className="text-[9px] font-black uppercase tracking-wider text-natural-muted mb-2 block">
+              Mais Frequentadas (Clique para escolher):
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {FREQUENT_CATEGORIES.map((cat) => (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => setCategory(cat)}
+                  className={`px-2.5 py-1.5 rounded-xl text-[10px] font-black transition-all ${
+                    category === cat 
+                      ? 'bg-natural-accent text-white shadow-sm' 
+                      : 'bg-natural-surface border border-natural-line text-natural-heading hover:border-natural-accent'
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Pesquisa Dinâmica de Especialidades */}
+          <div className="space-y-1.5 pt-2 border-t border-natural-line">
+            <span className="text-[9px] font-black uppercase tracking-wider text-natural-muted block">
+              Pesquisar Todas as Especialidades:
+            </span>
+            <div className="bg-natural-surface border border-natural-line p-2.5 rounded-xl flex items-center gap-2 focus-within:border-natural-accent focus-within:bg-white transition-colors">
+              <Search className="w-4 h-4 text-natural-muted shrink-0" />
+              <input
+                type="text"
+                placeholder="Ex: Ar Condicionado, Soldador, DStv, Costureiro..."
+                value={specialtySearch}
+                onChange={(e) => setSpecialtySearch(e.target.value)}
+                className="w-full outline-none text-xs font-semibold text-natural-heading bg-transparent"
+              />
+              {specialtySearch && (
+                <button type="button" onClick={() => setSpecialtySearch('')} className="text-natural-muted hover:text-black">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Resultados da Pesquisa */}
+            {filteredSpecialties.length > 0 && specialtySearch && (
+              <div className="bg-white border border-natural-line rounded-xl max-h-40 overflow-y-auto p-1 shadow-lg space-y-0.5">
+                {filteredSpecialties.slice(0, 10).map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      setCategory(item.name);
+                      setSpecialtySearch('');
+                    }}
+                    className="w-full text-left px-3 py-2 rounded-lg text-xs font-bold hover:bg-natural-surface flex items-center justify-between text-natural-heading"
+                  >
+                    <span>{item.name}</span>
+                    <span className="text-[8px] text-natural-muted uppercase font-normal">{item.categoryGroup}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Contacto de Confiança para Alarme SOS Anti-Crime */}
+        <div className="p-4 bg-red-50/70 border-2 border-red-200 rounded-2xl space-y-2.5">
+          <div className="flex items-center gap-2 text-red-900">
+            <ShieldAlert className="w-4 h-4 text-red-600 shrink-0" />
+            <span className="text-[10px] font-black uppercase tracking-wider">Contacto de Confiança (Alarme Anti-Crime SOS)</span>
+          </div>
+          <p className="text-[9px] text-red-800 leading-tight">
+            Parente ou amigo que receberá sua localização exata caso você acione o botão de emergência durante um serviço.
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              type="text"
+              placeholder="Nome do parente"
+              value={emergencyContactName}
+              onChange={(e) => setEmergencyContactName(e.target.value)}
+              className="w-full px-3 py-2 text-xs font-semibold bg-white border border-red-200 rounded-xl outline-none"
+            />
+            <input
+              type="tel"
+              placeholder="Telefone / WhatsApp"
+              value={emergencyContactPhone}
+              onChange={(e) => setEmergencyContactPhone(e.target.value)}
+              className="w-full px-3 py-2 text-xs font-semibold bg-white border border-red-200 rounded-xl outline-none"
+            />
           </div>
         </div>
 
         {/* Verification Section */}
         <div className="bg-amber-50 p-6 rounded-[2rem] border-2 border-dashed border-amber-200">
           <p className="text-[10px] font-black text-amber-900 uppercase tracking-widest mb-4 italic flex items-center gap-2">
-            <Lock className="w-4 h-4" /> Segurança: Verificação Obrigatória
+            <Lock className="w-4 h-4" /> Segurança: Verificação Obrigatória de BI
           </p>
           <div className="grid grid-cols-2 gap-4">
             <label className="cursor-pointer">
@@ -4267,9 +4530,9 @@ const WorkerProfileForm = ({ onSave, t }: { onSave: (data: { name: string, categ
         </div>
 
         {/* Portfolio Section */}
-        <div className="bg-white border-2 border-natural-line p-6 rounded-[2rem] shadow-sm">
-           <p className="text-[10px] font-black text-natural-muted uppercase tracking-widest mb-4 italic">Portfolio / Trabalhos Anteriores</p>
-           <div className="flex gap-4">
+        <div className="bg-white border-2 border-natural-line p-5 rounded-[2rem] shadow-sm">
+           <p className="text-[10px] font-black text-natural-muted uppercase tracking-widest mb-3 italic">Portfolio / Trabalhos Anteriores</p>
+           <div className="flex gap-3">
               {portfolio.map((img, idx) => (
                 <div key={idx} className="relative w-20 h-20 rounded-2xl overflow-hidden border-2 border-natural-line">
                    <img src={img} alt="" className="w-full h-full object-cover" />
@@ -4286,24 +4549,24 @@ const WorkerProfileForm = ({ onSave, t }: { onSave: (data: { name: string, categ
                 </label>
               )}
            </div>
-           <p className="text-[8px] text-natural-muted font-bold mt-3 leading-tight">Adicione até 3 fotos dos seus melhores biscates.</p>
+           <p className="text-[8px] text-natural-muted font-bold mt-2 leading-tight">Adicione até 3 fotos dos seus melhores biscates (otimizadas automaticamente).</p>
         </div>
 
         {error && (
-          <div className="bg-red-50 text-red-600 p-4 rounded-2xl text-[10px] font-bold uppercase tracking-widest text-center border border-red-100 animate-bounce">
+          <div className="bg-red-50 text-red-600 p-4 rounded-2xl text-[10px] font-bold uppercase tracking-widest text-center border border-red-100">
             ⚠️ {error}
           </div>
         )}
 
         <button 
           onClick={handleFinalize} 
-          disabled={!name || !biPhoto || !biSelfie || isValidating}
-          className="w-full bg-natural-accent text-white font-black py-6 rounded-[2rem] shadow-2xl shadow-natural-accent/40 text-xl uppercase tracking-widest mt-6 active:scale-95 transition-transform disabled:opacity-50 flex items-center justify-center gap-4"
+          disabled={!name || !biPhoto || !biSelfie || isValidating || isCompressing}
+          className="w-full bg-natural-accent text-white font-black py-5 rounded-[2rem] shadow-xl shadow-natural-accent/30 text-lg uppercase tracking-widest mt-4 active:scale-95 transition-transform disabled:opacity-50 flex items-center justify-center gap-3"
         >
-          {isValidating ? (
+          {isValidating || isCompressing ? (
             <>
-              <div className="w-6 h-6 border-4 border-white border-t-transparent rounded-full animate-spin" />
-              <span>{t.validating}</span>
+              <div className="w-5 h-5 border-3 border-white border-t-transparent rounded-full animate-spin" />
+              <span>{isCompressing ? 'Otimizando Fotos...' : t.validating}</span>
             </>
           ) : (
             t.finalizeReg
@@ -4314,56 +4577,70 @@ const WorkerProfileForm = ({ onSave, t }: { onSave: (data: { name: string, categ
   );
 };
 
-const ProviderCard = memo(({ provider, onSelect }: { provider: Provider, onSelect: (p: Provider) => void }) => (
-  <motion.div 
-    initial={{ opacity: 0, scale: 0.95 }}
-    animate={{ opacity: 1, scale: 1 }}
-    whileHover={{ y: -2 }}
-    whileTap={{ scale: 0.98 }}
-    className={`bg-white p-5 rounded-[2.5rem] border-2 shadow-premium mb-4 relative overflow-hidden group cursor-pointer hover:border-natural-accent transition-all border-l-8 ${provider.verified ? 'border-l-natural-success' : 'border-l-natural-accent'}`}
-    onClick={() => onSelect(provider)}
-  >
-    <div className="absolute top-4 right-4 z-20">
-      <button 
-        onClick={(e) => {
-          e.stopPropagation();
-          const shareUrl = `${window.location.origin}${window.location.pathname}?workerId=${provider.id}`;
-          shortenUrl(shareUrl).then(short => {
-            navigator.clipboard.writeText(short);
-            alert("Link do perfil encurtado e copiado!");
-          });
-        }}
-        className="p-2 bg-natural-surface rounded-full hover:bg-natural-accent hover:text-white transition-colors"
-      >
-        <Share2 className="w-4 h-4" />
-      </button>
-    </div>
-    <div className="flex gap-5">
-      <div className="relative">
-        <div className="w-20 h-20 rounded-[1.5rem] bg-natural-surface overflow-hidden flex-shrink-0 border-2 border-white shadow-inner">
-          <img src={provider.photo} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-        </div>
-        {provider.verified && (
-          <div className="absolute -right-2 -bottom-2 bg-natural-success text-white p-1.5 rounded-full border-2 border-white shadow-accent-glow">
-            <CheckCircle2 className="w-4 h-4" />
-          </div>
-        )}
+const ProviderCard = memo(({ provider, onSelect, userPos }: { provider: Provider, onSelect: (p: Provider) => void, userPos?: [number, number] }) => {
+  const travel = useMemo(() => {
+    if (!userPos) return null;
+    const coords = getProviderCoordinates(provider.id, userPos);
+    const dist = calculateHaversineDistanceKm(userPos, coords);
+    return estimateTravelTime(dist);
+  }, [provider.id, userPos]);
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      whileHover={{ y: -2 }}
+      whileTap={{ scale: 0.98 }}
+      className={`bg-white p-5 rounded-[2.5rem] border-2 shadow-premium mb-4 relative overflow-hidden group cursor-pointer hover:border-natural-accent transition-all border-l-8 ${provider.verified ? 'border-l-natural-success' : 'border-l-natural-accent'}`}
+      onClick={() => onSelect(provider)}
+    >
+      <div className="absolute top-4 right-4 z-20">
+        <button 
+          onClick={(e) => {
+            e.stopPropagation();
+            const shareUrl = `${window.location.origin}${window.location.pathname}?workerId=${provider.id}`;
+            shortenUrl(shareUrl).then(short => {
+              navigator.clipboard.writeText(short);
+              alert("Link do perfil encurtado e copiado!");
+            });
+          }}
+          className="p-2 bg-natural-surface rounded-full hover:bg-natural-accent hover:text-white transition-colors"
+        >
+          <Share2 className="w-4 h-4" />
+        </button>
       </div>
-      <div className="flex-1 py-1">
-        <div className="flex items-center justify-between mb-1.5">
-          <div className="flex items-center gap-2">
-            <h4 className="font-black text-natural-heading leading-none text-base">{provider.name}</h4>
-            {provider.level === 3 && <span className="bg-orange-100 text-orange-600 px-2 py-0.5 rounded-lg text-[8px] font-black uppercase tracking-wider">Elite</span>}
+      <div className="flex gap-5">
+        <div className="relative">
+          <div className="w-20 h-20 rounded-[1.5rem] bg-natural-surface overflow-hidden flex-shrink-0 border-2 border-white shadow-inner">
+            <img src={provider.photo} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
           </div>
-          <span className="text-[8px] font-black uppercase text-natural-success flex items-center gap-1 bg-green-50 px-2 py-1 rounded-full"><div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" /> Ativo</span>
+          {provider.verified && (
+            <div className="absolute -right-2 -bottom-2 bg-natural-success text-white p-1.5 rounded-full border-2 border-white shadow-accent-glow">
+              <CheckCircle2 className="w-4 h-4" />
+            </div>
+          )}
         </div>
-        <p className="text-[10px] font-black text-natural-accent uppercase tracking-[0.15em] mb-3">{provider.category}</p>
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-1.5 text-[11px] font-black bg-natural-surface px-2.5 py-1 rounded-xl"><Star className="w-3.5 h-3.5 text-natural-accent fill-natural-accent" /> {provider.rating}</div>
-          <div className="flex items-center gap-1.5 text-[11px] text-natural-muted font-bold uppercase tracking-tight opacity-70"><MapPin className="w-3.5 h-3.5" /> {provider.bairro}</div>
+        <div className="flex-1 py-1">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-2">
+              <h4 className="font-black text-natural-heading leading-none text-base">{provider.name}</h4>
+              {provider.level === 3 && <span className="bg-orange-100 text-orange-600 px-2 py-0.5 rounded-lg text-[8px] font-black uppercase tracking-wider">Elite</span>}
+            </div>
+            <span className="text-[8px] font-black uppercase text-natural-success flex items-center gap-1 bg-green-50 px-2 py-1 rounded-full"><div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" /> Ativo</span>
+          </div>
+          <p className="text-[10px] font-black text-natural-accent uppercase tracking-[0.15em] mb-2.5">{provider.category}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1.5 text-[11px] font-black bg-natural-surface px-2.5 py-1 rounded-xl"><Star className="w-3.5 h-3.5 text-natural-accent fill-natural-accent" /> {provider.rating}</div>
+            <div className="flex items-center gap-1.5 text-[11px] text-natural-muted font-bold uppercase tracking-tight opacity-70"><MapPin className="w-3.5 h-3.5" /> {provider.bairro}</div>
+            {travel && (
+              <div className="flex items-center gap-1 text-[10px] font-black text-orange-950 bg-orange-50 border border-orange-200 px-2.5 py-1 rounded-xl" title="Tempo estimado pelo Haversine">
+                <Clock className="w-3 h-3 text-natural-accent shrink-0" />
+                <span>{travel.formattedDistance} ({travel.primaryEtaText})</span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
-    </div>
 
     {provider.portfolio && provider.portfolio.length > 0 && (
       <div className="mt-5 flex gap-2 overflow-x-auto no-scrollbar pb-1">
@@ -4375,7 +4652,8 @@ const ProviderCard = memo(({ provider, onSelect }: { provider: Provider, onSelec
       </div>
     )}
   </motion.div>
-));
+  );
+});
 
 const CategoryButton = memo(({ icon: Icon, label, active, onClick, isTop, ...props }: { icon: any, label: string, active: boolean, onClick: () => void, isTop?: boolean, [key: string]: any }) => (
   <button 
@@ -4534,13 +4812,17 @@ function MainApp() {
   const [voiceInputText, setVoiceInputText] = useState('');
   const [minRating, setMinRating] = useState<number>(0);
   const [onlyVerified, setOnlyVerified] = useState(false);
-  const [adminView, setAdminView] = useState<'active' | 'history' | 'metrics'>('active');
+  const [adminView, setAdminView] = useState<'active' | 'history' | 'metrics' | 'alerts'>('active');
   const [paymentSearch, setPaymentSearch] = useState('');
   const [paymentDate, setPaymentDate] = useState('');
   const [providerReviews, setProviderReviews] = useState<{rating: number, comment: string, date: string}[]>([]);
   const [userLocation, setUserLocation] = useState<[number, number]>([-25.9692, 32.5732]); // Maputo Default
   const [exploreViewMode, setExploreViewMode] = useState<'list' | 'map'>('list');
   const [hasNewJobNotify, setHasNewJobNotify] = useState(false);
+  const [showEmergencyModal, setShowEmergencyModal] = useState(false);
+  const [activeEmergencyJob, setActiveEmergencyJob] = useState<any>(null);
+  const [showClientProfileModal, setShowClientProfileModal] = useState(false);
+  const [emergencyAlerts, setEmergencyAlerts] = useState<any[]>([]);
 
   const t = translations[lang] || translations.pt;
   const isAdminEmail = currentUser?.email === 'fushawshaw@gmail.com' || currentUser?.email === 'wanderj419@gmail.com' || currentUser?.email === 'mozbiscates@gmail.com';
@@ -5034,6 +5316,27 @@ function MainApp() {
     }
   }, [view, role, currentUser?.uid, userData?.category, userData?.bairro, lang, userData?.fullName]);
 
+  // Emergency Alerts Real-time Listener (for Admin monitor)
+  useEffect(() => {
+    if (role !== 'admin' || !currentUser) return;
+    const q = query(
+      collection(db, 'emergency_alerts'),
+      orderBy('createdAt', 'desc'),
+      limit(50)
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const list = snapshot.docs.map(d => ({
+        id: d.id,
+        ...d.data()
+      }));
+      setEmergencyAlerts(list);
+    }, (err) => {
+      console.warn('Emergency alerts sync error:', err);
+    });
+
+    return () => unsubscribe();
+  }, [role, currentUser]);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
@@ -5341,17 +5644,47 @@ function MainApp() {
         fullName: providerData.name,
         role: 'worker',
         category: providerData.category,
+        specialty: providerData.specialty || providerData.category,
+        specialties: [providerData.category],
         photo: providerData.photo,
         biPhoto: providerData.biPhoto,
         biSelfie: providerData.biSelfie,
+        nuit: providerData.nuit || null,
+        emergencyContactName: providerData.emergencyContactName || '',
+        emergencyContactPhone: providerData.emergencyContactPhone || '',
         verified: true,
         portfolio: providerData.portfolio || [],
         email: currentUser.email,
         level: 1,
         jobs: 0,
-        createdAt: serverTimestamp()
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
       }, { merge: true });
       setTab('jobs');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `users/${currentUser?.uid || 'unknown'}`);
+    }
+  };
+
+  const handleCreateClientProfile = async (clientData: any) => {
+    if (!currentUser) return;
+    try {
+      await setDoc(doc(db, 'users', currentUser.uid), {
+        uid: currentUser.uid,
+        fullName: clientData.fullName,
+        role: 'client',
+        phone: clientData.phone,
+        bairro: clientData.bairro,
+        city: clientData.city,
+        photo: clientData.photo,
+        biPhoto: clientData.biPhoto,
+        emergencyContactName: clientData.emergencyContactName,
+        emergencyContactPhone: clientData.emergencyContactPhone,
+        verified: true,
+        email: currentUser.email,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+      setShowClientProfileModal(false);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `users/${currentUser?.uid || 'unknown'}`);
     }
@@ -5478,9 +5811,48 @@ function MainApp() {
     );
   }
 
+  // Cadastro Obrigatório de Segurança para Quem Precisa de Serviços (Cliente)
+  if (role === 'client' && (!userData?.phone || !userData?.biPhoto)) {
+    return (
+      <div className="min-h-screen bg-natural-bg p-4 flex flex-col items-center justify-center">
+        <header className="w-full max-w-lg py-4 flex justify-between items-center mb-4">
+          <h1 className="font-black italic text-xl">Mozbiscates</h1>
+          <button onClick={handleLogout} className="text-natural-muted font-black text-[10px] uppercase">{t.logout || 'Sair'}</button>
+        </header>
+        <ClientSecurityProfileModal
+          initialData={userData}
+          onSave={handleCreateClientProfile}
+          isMandatory={true}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-natural-bg text-natural-ink font-sans flex flex-col items-center selection:bg-natural-accent selection:text-white pb-24">
       <PwaGuideModal onShow={showPwaGuide} onClose={() => setShowPwaGuide(false)} />
+
+      {/* Alarme de Emergência Anti-Crime SOS (Para Ambos os Lados) */}
+      <EmergencyModal 
+        isOpen={showEmergencyModal}
+        onClose={() => {
+          setShowEmergencyModal(false);
+          setActiveEmergencyJob(null);
+        }}
+        currentUser={currentUser}
+        userData={userData}
+        activeJob={activeEmergencyJob}
+      />
+
+      {/* Modal de Cadastro de Segurança do Cliente (Edição) */}
+      {showClientProfileModal && (
+        <ClientSecurityProfileModal
+          initialData={userData}
+          onSave={handleCreateClientProfile}
+          onCancel={() => setShowClientProfileModal(false)}
+          isMandatory={false}
+        />
+      )}
       
       <div className="w-full max-w-md bg-natural-bg min-h-screen flex flex-col relative overflow-hidden">
         
@@ -5691,6 +6063,29 @@ function MainApp() {
           </div>
           
           <div className="flex items-center gap-2">
+            {/* Botão de Emergência SOS Anti-Crime para AMBOS os Lados */}
+            <button 
+              onClick={() => {
+                setActiveEmergencyJob(null);
+                setShowEmergencyModal(true);
+              }}
+              className="bg-red-600 hover:bg-red-700 active:scale-95 text-white px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 shadow-md shadow-red-500/30 animate-pulse cursor-pointer"
+              title="Alarme SOS Anti-Crime (Pânico, Sirene e Polícia 112)"
+            >
+              <ShieldAlert className="w-4 h-4 text-white" />
+              <span>SOS</span>
+            </button>
+
+            {role === 'client' && (
+              <button 
+                onClick={() => setShowClientProfileModal(true)}
+                className="w-10 h-10 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl flex items-center justify-center hover:bg-emerald-100 transition-all shadow-sm active:scale-95 cursor-pointer"
+                title="Meu Cadastro de Segurança (BI & Confiança)"
+              >
+                <ShieldCheck className="w-5 h-5 text-emerald-700" />
+              </button>
+            )}
+
             {!isInstalled && (
               <button 
                 onClick={handleInstallClick}
@@ -5732,6 +6127,10 @@ function MainApp() {
               </button>
               <button onClick={() => { setTab('jobs'); setAdminView('metrics'); }} className={`text-[12px] font-black uppercase tracking-[0.15em] transition-all whitespace-nowrap pb-3 border-b-4 ${tab === 'jobs' && adminView === 'metrics' ? 'text-natural-heading border-natural-accent' : 'text-natural-muted border-transparent opacity-30'}`}>
                 {t.metrics}
+              </button>
+              <button onClick={() => { setTab('jobs'); setAdminView('alerts'); }} className={`text-[12px] font-black uppercase tracking-[0.15em] transition-all whitespace-nowrap pb-3 border-b-4 flex items-center gap-1.5 ${tab === 'jobs' && adminView === 'alerts' ? 'text-red-600 border-red-600' : 'text-natural-muted border-transparent opacity-40'}`}>
+                <ShieldAlert className="w-3.5 h-3.5" />
+                <span>SOS {emergencyAlerts.filter(a => a.status === 'EMERGENCIA_ATIVA').length > 0 ? `(${emergencyAlerts.filter(a => a.status === 'EMERGENCIA_ATIVA').length})` : ''}</span>
               </button>
             </>
           )}
@@ -5850,6 +6249,8 @@ function MainApp() {
                         jobs={role === 'worker' ? jobs : []} 
                         userPos={userLocation} 
                         t={t} 
+                        selectedProvider={selectedProvider}
+                        onSelectProvider={handleSelectProvider}
                       />
                     </div>
                   )}
@@ -5880,7 +6281,14 @@ function MainApp() {
                  </div>
 
                  <div className="grid gap-4">
-                   {filteredProviders.map(p => <ProviderCard key={p.id} provider={p} onSelect={handleSelectProvider} />)}
+                   {filteredProviders.map(p => (
+                     <ProviderCard 
+                       key={p.id} 
+                       provider={p} 
+                       onSelect={handleSelectProvider} 
+                       userPos={userLocation}
+                     />
+                   ))}
                  </div>
                </div>
              ) : (
@@ -5975,12 +6383,14 @@ function MainApp() {
                    </div>
                  ) : role === 'admin' && adminView === 'metrics' ? (
                    <AdminMetrics jobs={jobs} t={t} />
+                 ) : role === 'admin' && adminView === 'alerts' ? (
+                   <AdminEmergencyMonitor alerts={emergencyAlerts} />
                  ) : (
                    jobs.length > 0 ? (
                     <div className="space-y-4">
                       {jobs.map(j => (
                         <div key={j.id} id={`job-${j.id}`} className={focusedJobId === j.id ? 'ring-4 ring-natural-accent ring-offset-4 rounded-[2rem] animate-pulse transition-all duration-1000' : ''}>
-                          <JobCard job={j} role={role!} onAction={handleJobAction} t={t} currentUser={currentUser} lang={lang} />
+                          <JobCard job={j} role={role!} onAction={handleJobAction} t={t} currentUser={currentUser} lang={lang} onPanic={(job) => { setActiveEmergencyJob(job); setShowEmergencyModal(true); }} />
                         </div>
                       ))}
                     </div>
@@ -6184,8 +6594,65 @@ function MainApp() {
                        </span>
                     </div>
                     <div className="flex items-center gap-4 text-[10px] font-black text-natural-muted"><Star className="w-3 h-3 text-natural-accent fill-natural-accent" /> {selectedProvider.rating} • {selectedProvider.jobs} Biscates</div>
+                    <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                      <span className="inline-flex items-center gap-1 text-[9px] font-black text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg">
+                        <ShieldCheck className="w-3 h-3 text-emerald-600" /> BI Verificado
+                      </span>
+                      {(selectedProvider as any).nuit && (
+                        <span className="inline-flex items-center gap-1 text-[9px] font-black text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-lg">
+                          <FileText className="w-3 h-3 text-slate-500" /> NUIT: {(selectedProvider as any).nuit}
+                        </span>
+                      )}
+                      <span className="inline-flex items-center gap-1 text-[9px] font-black text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-lg">
+                        <ShieldAlert className="w-3 h-3 text-red-600" /> Alarme SOS Ativo
+                      </span>
+                    </div>
                   </div>
                 </div>
+
+                {/* Estimativa de Tempo de Deslocação Haversine */}
+                {(() => {
+                  const targetCoords = getProviderCoordinates(selectedProvider.id, userLocation);
+                  const distKm = calculateHaversineDistanceKm(userLocation, targetCoords);
+                  const travel = estimateTravelTime(distKm);
+
+                  return (
+                    <div className="mb-8 p-4 bg-gradient-to-br from-orange-50 via-amber-50/50 to-white border-2 border-orange-200 rounded-[2rem] shadow-sm">
+                      <div className="flex items-center justify-between mb-3 pb-2.5 border-b border-orange-200/50">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-xl bg-natural-accent text-white flex items-center justify-center shadow-xs shrink-0">
+                            <Navigation className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <span className="text-[10px] font-black uppercase tracking-wider text-orange-950">Deslocação & Distância</span>
+                            <p className="text-[11px] text-orange-800 font-bold">A {travel.formattedDistance} de si (Fórmula Haversine)</p>
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-black text-natural-accent bg-white px-2.5 py-1 rounded-xl border border-orange-200 shadow-2xs">
+                          {travel.primaryEtaText}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="bg-white p-2.5 rounded-2xl border border-orange-100 flex flex-col items-center text-center shadow-2xs">
+                          <span className="text-[9px] font-black text-slate-500 uppercase tracking-tight mb-1">🚗 Carro / Chapa</span>
+                          <span className="text-sm font-black text-natural-heading leading-tight">~{travel.carMinutes} min</span>
+                        </div>
+                        <div className="bg-white p-2.5 rounded-2xl border border-orange-100 flex flex-col items-center text-center shadow-2xs">
+                          <span className="text-[9px] font-black text-slate-500 uppercase tracking-tight mb-1">🛵 Moto / Txopela</span>
+                          <span className="text-sm font-black text-natural-heading leading-tight">~{travel.motoMinutes} min</span>
+                        </div>
+                        <div className="bg-white p-2.5 rounded-2xl border border-orange-100 flex flex-col items-center text-center shadow-2xs">
+                          <span className="text-[9px] font-black text-slate-500 uppercase tracking-tight mb-1">🚶 A pé</span>
+                          <span className="text-sm font-black text-natural-heading leading-tight">~{travel.walkingMinutes} min</span>
+                        </div>
+                      </div>
+                      <p className="text-[9px] text-orange-900/70 font-semibold mt-2.5 text-center leading-snug">
+                        Tempo estimado entre a sua localização atual no mapa e o prestador selecionado com base nas velocidades médias de trânsito em Moçambique.
+                      </p>
+                    </div>
+                  );
+                })()}
 
                 {/* Portfolio Mosaic */}
                 {selectedProvider.portfolio && selectedProvider.portfolio.length > 0 && (

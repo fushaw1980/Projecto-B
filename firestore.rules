@@ -49,6 +49,7 @@ service cloud.firestore {
              data.role in ['client', 'worker', 'admin'] &&
              (data.get('category', null) == null || (data.category is string && data.category.size() <= 60)) &&
              (data.get('phone', null) == null || (data.phone is string && data.phone.size() <= 30)) &&
+             (data.get('nuit', null) == null || (data.nuit is string && data.nuit.size() <= 20)) &&
              (data.get('updatedAt', null) == null || data.updatedAt == request.time);
     }
 
@@ -58,7 +59,11 @@ service cloud.firestore {
       allow create: if isOwner(userId) && isValidUser(incoming()) && (incoming().role != 'admin' || isAdmin());
       allow update: if (
         isOwner(userId) && isValidUser(incoming()) && 
-        incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'role', 'category', 'bairro', 'phone', 'photo', 'level', 'jobs', 'balance', 'verified', 'updatedAt']) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'fullName', 'role', 'category', 'specialty', 'specialties', 'bairro', 'city', 'phone', 
+          'nuit', 'photo', 'biPhoto', 'biSelfie', 'emergencyContactName', 'emergencyContactPhone', 
+          'portfolio', 'level', 'jobs', 'balance', 'verified', 'updatedAt'
+        ]) &&
         (incoming().verified == existing().verified || isAdmin()) &&
         (incoming().role == existing().role || incoming().role != 'admin' || isAdmin())
       ) || (
@@ -72,6 +77,13 @@ service cloud.firestore {
         allow read: if true;
         allow create: if isSignedIn() && incoming().authorId == request.auth.uid;
       }
+    }
+
+    // --- Emergency Alerts (SOS Anti-Crime) ---
+    match /emergency_alerts/{alertId} {
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid;
+      allow update, delete: if isAdmin();
     }
 
     // --- Job Validation ---
@@ -96,7 +108,8 @@ service cloud.firestore {
         // Client actions
         (existing().clientId == request.auth.uid && (
           (incoming().status in ['VALIDACAO_PENDENTE', 'PAGO'] && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'transactionId', 'updatedAt'])) ||
-          (incoming().status == 'CONCLUIDO' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'payoutAmount', 'updatedAt']))
+          (incoming().status == 'CONCLUIDO' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'payoutAmount', 'updatedAt'])) ||
+          (incoming().diff(existing()).affectedKeys().hasOnly(['panicAlert', 'panicLocation', 'updatedAt']))
         )) ||
         // Worker actions
         (existing().providerId == request.auth.uid && (
