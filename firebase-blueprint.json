@@ -40,6 +40,11 @@
         "photoAfter": { "type": "string" },
         "panicAlert": { "type": "boolean" },
         "panicLocation": { "type": "string" },
+        "cancellationReason": { "type": "string" },
+        "previousStatus": { "type": "string" },
+        "cancelledBy": { "type": "string" },
+        "rescheduledAt": { "type": "string", "format": "date-time" },
+        "rescheduleNote": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -66,6 +71,19 @@
          "authorId": { "type": "string" },
          "date": { "type": "string", "format": "date-time" }
       }
+    },
+    "EmergencyAlert": {
+      "title": "Emergency Alert",
+      "description": "Anti-crime SOS emergency alert",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userRole": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -84,6 +102,10 @@
     "users/{userId}/reviews/{reviewId}": {
       "schema": "Review",
       "description": "Reviews received by a worker"
+    },
+    "emergency_alerts/{alertId}": {
+      "schema": "EmergencyAlert",
+      "description": "SOS anti-crime alerts triggered by users"
     }
   }
 }

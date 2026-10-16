@@ -12,6 +12,14 @@ export async function compressImage(
   return new Promise((resolve, reject) => {
     // If it's a File object
     if (typeof fileOrBase64 !== 'string') {
+      if (!fileOrBase64.type.startsWith('image/')) {
+        reject(new Error('Ficheiro inválido. Por favor selecione uma imagem legítima (JPG, PNG, WebP).'));
+        return;
+      }
+      if (fileOrBase64.size > 25 * 1024 * 1024) {
+        reject(new Error('A imagem é demasiado grande (máximo 25MB).'));
+        return;
+      }
       const reader = new FileReader();
       reader.onerror = () => reject(new Error('Falha ao ler imagem'));
       reader.onload = (e) => {
@@ -33,8 +41,14 @@ function compressSrc(
   resolve: (res: string) => void,
   reject: (err: any) => void
 ) {
-  // If already a tiny SVG or already small data URL (< 50KB), keep as is
-  if (src.startsWith('data:image/svg') || (src.startsWith('data:') && src.length < 50000)) {
+  // Guard against non-image data URIs or malicious script injections
+  if (typeof src !== 'string' || (!src.startsWith('data:image/') && !src.startsWith('http://') && !src.startsWith('https://') && !src.startsWith('blob:'))) {
+    reject(new Error('Origem de imagem inválida ou insegura.'));
+    return;
+  }
+
+  // If already a tiny SVG without scripts or small data URL (< 50KB), keep as is
+  if (src.startsWith('data:image/svg') && !src.toLowerCase().includes('script') || (src.startsWith('data:image/') && src.length < 50000)) {
     resolve(src);
     return;
   }

@@ -2,7 +2,7 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // --- Global Safety Net ---
+    // --- Global Safety Net: Default Deny ---
     match /{document=**} {
       allow read, write: if false;
     }
@@ -12,15 +12,11 @@ service cloud.firestore {
       allow read: if true;
     }
 
-    // --- Helpers ---
+    // --- Global Helpers ---
     function isSignedIn() {
       return request.auth != null;
     }
     
-    function isEmailVerified() {
-      return request.auth.token.email_verified == true;
-    }
-
     function isOwner(userId) {
       return isSignedIn() && request.auth.uid == userId;
     }
@@ -38,96 +34,196 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isSignedIn() && (request.auth.token.email == 'fushawshaw@gmail.com' || request.auth.token.email == 'wanderj419@gmail.com' || request.auth.token.email == 'mozbiscates@gmail.com');
+      return isSignedIn() && (
+        request.auth.token.email == 'fushawshaw@gmail.com' || 
+        request.auth.token.email == 'wanderj419@gmail.com' || 
+        request.auth.token.email == 'mozbiscates@gmail.com'
+      );
     }
 
-    // --- User Validation ---
+    // --- User Profile Validation ---
     function isValidUser(data) {
       return data.uid == request.auth.uid &&
-             (data.get('fullName', null) == null || (data.fullName is string && data.fullName.size() <= 100)) &&
              data.email == request.auth.token.email &&
              data.role in ['client', 'worker', 'admin'] &&
+             (data.get('fullName', null) == null || (data.fullName is string && data.fullName.size() <= 100)) &&
              (data.get('category', null) == null || (data.category is string && data.category.size() <= 60)) &&
              (data.get('phone', null) == null || (data.phone is string && data.phone.size() <= 30)) &&
              (data.get('nuit', null) == null || (data.nuit is string && data.nuit.size() <= 20)) &&
+             (data.get('bairro', null) == null || (data.bairro is string && data.bairro.size() <= 80)) &&
+             (data.get('city', null) == null || (data.city is string && data.city.size() <= 80)) &&
              (data.get('updatedAt', null) == null || data.updatedAt == request.time);
     }
 
+    // --- Collection: users (Perfis de Utilizador: client, worker, admin) ---
     match /users/{userId} {
-      allow get: if isSignedIn();
-      allow list: if isSignedIn() && (resource.data.role == 'worker' || resource.data.uid == request.auth.uid || isAdmin());
-      allow create: if isOwner(userId) && isValidUser(incoming()) && (incoming().role != 'admin' || isAdmin());
-      allow update: if (
-        isOwner(userId) && isValidUser(incoming()) && 
-        incoming().diff(existing()).affectedKeys().hasOnly([
-          'fullName', 'role', 'category', 'specialty', 'specialties', 'bairro', 'city', 'phone', 
-          'nuit', 'photo', 'biPhoto', 'biSelfie', 'emergencyContactName', 'emergencyContactPhone', 
-          'portfolio', 'level', 'jobs', 'balance', 'verified', 'updatedAt'
-        ]) &&
-        (incoming().verified == existing().verified || isAdmin()) &&
-        (incoming().role == existing().role || incoming().role != 'admin' || isAdmin())
-      ) || (
-        // Allow updating balance & jobs upon client service confirmation or settlement
-        isSignedIn() && incoming().diff(existing()).affectedKeys().hasOnly(['jobs', 'balance'])
-      ) || (
+      // Role-Based Read Restrictions (PII Protection):
+      // - Workers' profiles are public to signed-in users (clients need to search/hire them)
+      // - Clients' private profiles (containing phone/BI/emergency contact) can ONLY be read by the owner or admin
+      allow get: if isSignedIn() && isValidId(userId) && (
+        isOwner(userId) || 
+        resource.data.role == 'worker' || 
         isAdmin()
       );
       
+      // Role-Based List Restrictions:
+      // Can only query workers, own user record, or admin overview
+      allow list: if isSignedIn() && (
+        resource.data.role == 'worker' || 
+        resource.data.uid == request.auth.uid || 
+        isAdmin()
+      );
+      
+      // Role-Based Create Restrictions:
+      // Users can only register as 'client' or 'worker' (never self-promote to 'admin')
+      // Pre-verified status and pre-loaded balances are strictly blocked
+      allow create: if isOwner(userId) && 
+                       isValidId(userId) &&
+                       isValidUser(incoming()) && 
+                       (incoming().role in ['client', 'worker'] || isAdmin()) &&
+                       (incoming().get('verified', false) == false || isAdmin()) &&
+                       incoming().get('balance', 0) == 0;
+      
+      // Role-Based Update Restrictions:
+      allow update: if isValidId(userId) && (
+        // Case 1: Owner updates their profile data safely
+        (
+          isOwner(userId) && isValidUser(incoming()) && 
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'fullName', 'role', 'category', 'specialty', 'specialties', 'bairro', 'city', 'phone', 
+            'nuit', 'photo', 'biPhoto', 'biSelfie', 'emergencyContactName', 'emergencyContactPhone', 
+            'portfolio', 'level', 'jobs', 'balance', 'verified', 'updatedAt'
+          ]) &&
+          // Cannot tamper with verified status without admin
+          (incoming().get('verified', false) == existing().get('verified', false) || isAdmin()) &&
+          // Cannot self-promote role to admin
+          (incoming().role == existing().role || (incoming().role != 'admin' && existing().role != 'admin') || isAdmin()) &&
+          // Cannot inflate balance: owner can only withdraw (decrease) or maintain balance
+          (
+            incoming().get('balance', 0) == existing().get('balance', 0) || 
+            (incoming().get('balance', 0) < existing().get('balance', 0) && incoming().get('balance', 0) >= 0) ||
+            isAdmin()
+          )
+        ) ||
+        // Case 2: Client paying/crediting worker upon genuine service completion
+        (
+          isSignedIn() && 
+          !isOwner(userId) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['jobs', 'balance']) &&
+          incoming().get('balance', 0) > existing().get('balance', 0) &&
+          (incoming().get('balance', 0) - existing().get('balance', 0)) <= 500000 &&
+          incoming().get('jobs', 0) == (existing().get('jobs', 0) + 1)
+        ) ||
+        // Case 3: Admin full management
+        isAdmin()
+      );
+
+      // Reviews Subcollection
       match /reviews/{reviewId} {
         allow read: if true;
-        allow create: if isSignedIn() && incoming().authorId == request.auth.uid;
+        allow create: if isSignedIn() && isValidId(reviewId) &&
+                         incoming().authorId == request.auth.uid &&
+                         incoming().authorId != userId && // Cannot review yourself
+                         incoming().rating >= 1 && incoming().rating <= 5 &&
+                         (incoming().get('comment', null) == null || (incoming().comment is string && incoming().comment.size() <= 1000));
+        allow update, delete: if isAdmin();
       }
     }
 
     // --- Emergency Alerts (SOS Anti-Crime) ---
     match /emergency_alerts/{alertId} {
-      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() && incoming().userId == request.auth.uid;
+      allow read: if isSignedIn() && isValidId(alertId) && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && isValidId(alertId) &&
+                       incoming().userId == request.auth.uid && 
+                       incoming().status == 'EMERGENCIA_ATIVA' &&
+                       incoming().createdAt == request.time;
       allow update, delete: if isAdmin();
     }
 
-    // --- Job Validation ---
+    // --- Job Request Validation ---
     function isValidJob(data) {
       return data.clientId == request.auth.uid &&
-             data.category is string &&
-             data.amount is number && data.amount > 0 &&
-             data.status in ['AGUARDANDO_DEPOSITO', 'VALIDACAO_PENDENTE', 'PAGO', 'EM_CURSO', 'FINALIZADO', 'CONCLUIDO'] &&
+             data.providerId is string && data.providerId.size() > 0 &&
+             data.category is string && data.category.size() <= 60 &&
+             data.amount is number && data.amount >= 50 && data.amount <= 500000 &&
+             data.status == 'AGUARDANDO_DEPOSITO' &&
              data.createdAt == request.time;
     }
 
+    // --- Collection: jobs (Gestão de Biscates: Client, Worker, Admin) ---
     match /jobs/{jobId} {
-      allow get: if isSignedIn();
+      // Role-Based Single Read (Get):
+      // Only the client, the assigned provider, open matching opportunities, or admin can read
+      allow get: if isSignedIn() && isValidId(jobId) && (
+        resource.data.clientId == request.auth.uid || 
+        resource.data.providerId == request.auth.uid || 
+        resource.data.status == 'AGUARDANDO_DEPOSITO' || 
+        isAdmin()
+      );
+
+      // Role-Based Query Read (List):
+      // Restricts listing so clients only see their jobs, workers see their assigned jobs or open trades
       allow list: if isSignedIn() && (
         resource.data.clientId == request.auth.uid || 
         resource.data.providerId == request.auth.uid || 
-        resource.data.status in ['AGUARDANDO_DEPOSITO', 'VALIDACAO_PENDENTE', 'PAGO'] || 
+        resource.data.status == 'AGUARDANDO_DEPOSITO' || 
         isAdmin()
       );
-      allow create: if isSignedIn() && isValidJob(incoming());
-      allow update: if isSignedIn() && (
-        // Client actions
+
+      // Role-Based Create:
+      // Only clients can initiate a job, with authenticated clientId matching auth.uid
+      allow create: if isSignedIn() && isValidId(jobId) && isValidJob(incoming());
+
+      // Role-Based Update:
+      allow update: if isSignedIn() && isValidId(jobId) && (
+        // Client Actions:
         (existing().clientId == request.auth.uid && (
+          // Deposit / Payment submission
           (incoming().status in ['VALIDACAO_PENDENTE', 'PAGO'] && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'transactionId', 'updatedAt'])) ||
-          (incoming().status == 'CONCLUIDO' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'payoutAmount', 'updatedAt'])) ||
-          (incoming().diff(existing()).affectedKeys().hasOnly(['panicAlert', 'panicLocation', 'updatedAt']))
+          // Completion & Payout release
+          (incoming().status == 'CONCLUIDO' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'payoutAmount', 'updatedAt']) && incoming().payoutAmount > 0) ||
+          // SOS Emergency panic
+          (incoming().diff(existing()).affectedKeys().hasOnly(['panicAlert', 'panicLocation', 'updatedAt'])) ||
+          // Cancel due to unforeseen circumstances (chuva, atraso, imprevistos)
+          (incoming().status == 'CANCELADO' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cancellationReason', 'previousStatus', 'cancelledBy', 'updatedAt'])) ||
+          // Quick Reschedule: restore cancelled job to PAGO/AGUARDANDO_DEPOSITO keeping payment config
+          (existing().status == 'CANCELADO' && incoming().status in ['PAGO', 'AGUARDANDO_DEPOSITO'] && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'scheduledFor', 'bookingType', 'cancellationReason', 'rescheduledAt', 'rescheduleNote', 'updatedAt']))
         )) ||
-        // Worker actions
+        
+        // Worker Actions:
         (existing().providerId == request.auth.uid && (
-          (incoming().status == 'EM_CURSO' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'photoBefore', 'updatedAt'])) ||
-          (incoming().status == 'FINALIZADO' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'photoAfter', 'updatedAt'])) ||
-          (incoming().diff(existing()).affectedKeys().hasOnly(['panicAlert', 'panicLocation', 'updatedAt']))
+          // Check-in / Start work
+          (incoming().status == 'EM_CURSO' && existing().status in ['PAGO'] && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'photoBefore', 'updatedAt'])) ||
+          // Check-out / Finish work
+          (incoming().status == 'FINALIZADO' && existing().status in ['EM_CURSO'] && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'photoAfter', 'updatedAt'])) ||
+          // SOS Emergency panic
+          (incoming().diff(existing()).affectedKeys().hasOnly(['panicAlert', 'panicLocation', 'updatedAt'])) ||
+          // Cancel due to unforeseen circumstances
+          (incoming().status == 'CANCELADO' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cancellationReason', 'previousStatus', 'cancelledBy', 'updatedAt'])) ||
+          // Quick Reschedule: restore cancelled job to PAGO/AGUARDANDO_DEPOSITO keeping payment config
+          (existing().status == 'CANCELADO' && incoming().status in ['PAGO', 'AGUARDANDO_DEPOSITO'] && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'scheduledFor', 'bookingType', 'cancellationReason', 'rescheduledAt', 'rescheduleNote', 'updatedAt']))
         )) ||
-        // Admin actions
-        (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'payoutTransactionId', 'updatedAt']))
+        
+        // Admin Actions:
+        (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'payoutTransactionId', 'cancellationReason', 'scheduledFor', 'updatedAt']))
       );
 
+      // Subcollection: messages (Chat do Biscate)
       match /messages/{messageId} {
-        allow read: if isSignedIn() && (
+        allow read: if isSignedIn() && isValidId(messageId) && (
           get(/databases/$(database)/documents/jobs/$(jobId)).data.clientId == request.auth.uid || 
           get(/databases/$(database)/documents/jobs/$(jobId)).data.providerId == request.auth.uid ||
           isAdmin()
         );
-        allow create: if isSignedIn() && (incoming().senderId in [request.auth.uid, 'system']);
+        allow create: if isSignedIn() && isValidId(messageId) &&
+                         (incoming().senderId in [request.auth.uid, 'system']) &&
+                         (
+                           get(/databases/$(database)/documents/jobs/$(jobId)).data.clientId == request.auth.uid || 
+                           get(/databases/$(database)/documents/jobs/$(jobId)).data.providerId == request.auth.uid ||
+                           isAdmin()
+                         ) &&
+                         incoming().text is string && incoming().text.size() <= 2000;
+        allow update, delete: if isAdmin();
       }
     }
   }

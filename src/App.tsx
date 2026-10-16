@@ -62,7 +62,11 @@ import {
   PhoneCall,
   ShieldCheck,
   Clock,
-  Navigation
+  Navigation,
+  RefreshCw,
+  RotateCcw,
+  CalendarClock,
+  AlertTriangle
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { motion, AnimatePresence } from 'motion/react';
@@ -224,24 +228,45 @@ const requestNotificationPermission = async () => {
   return permission === 'granted';
 };
 
-const sendLocalNotification = (title: string, options: NotificationOptions & { data?: { url?: string, jobId?: string } }) => {
+const sendLocalNotification = (title: string, options: NotificationOptions & { data?: { url?: string, jobId?: string, providerId?: string, type?: string } }) => {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  const n = new Notification(title, { ...options, icon: NOTIFICATION_ICON });
-  
-  n.onclick = () => {
-    window.focus();
-    if (options.data?.jobId) {
-      // Logic to open specific job
-      const event = new CustomEvent('open-job', { detail: options.data.jobId });
-      window.dispatchEvent(event);
-    }
-    n.close();
-  };
 
-  // Also try sound
+  // Try Service Worker registration for background notifications
+  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+    navigator.serviceWorker.ready.then(reg => {
+      reg.showNotification(title, {
+        ...options,
+        icon: options.icon || NOTIFICATION_ICON,
+        badge: NOTIFICATION_ICON
+      });
+    }).catch(() => {
+      triggerWindowNotification(title, options);
+    });
+  } else {
+    triggerWindowNotification(title, options);
+  }
+
+  // Also try alert sound
   try {
     const audio = new Audio(NOTIFICATION_SOUND);
     audio.play().catch(() => {});
+  } catch(e) {}
+};
+
+const triggerWindowNotification = (title: string, options: NotificationOptions & { data?: { url?: string, jobId?: string, providerId?: string, type?: string } }) => {
+  try {
+    const n = new Notification(title, { ...options, icon: options.icon || NOTIFICATION_ICON });
+    n.onclick = () => {
+      window.focus();
+      if (options.data?.providerId) {
+        const event = new CustomEvent('open-provider', { detail: options.data.providerId });
+        window.dispatchEvent(event);
+      } else if (options.data?.jobId) {
+        const event = new CustomEvent('open-job', { detail: options.data.jobId });
+        window.dispatchEvent(event);
+      }
+      n.close();
+    };
   } catch(e) {}
 };
 // --- Map Components ---
@@ -511,6 +536,14 @@ interface Job {
   photoBefore?: string;
   photoAfter?: string;
   panicAlert?: boolean;
+  cancellationReason?: string | null;
+  previousStatus?: string;
+  cancelledBy?: string;
+  rescheduledAt?: any;
+  rescheduleNote?: string;
+  clientName?: string;
+  providerName?: string;
+  bairro?: string;
   createdAt: any;
   updatedAt?: any;
   lat?: number;
@@ -678,19 +711,25 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
 
   const handleWithdraw = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isProcessing) return;
     setError('');
     
     const amt = parseFloat(withdrawAmount);
-    if (isNaN(amt) || amt <= 0) {
-      setError('Introduza um valor válido.');
+    if (isNaN(amt) || amt < 10) {
+      setError('O valor mínimo de levantamento é de 10 MT.');
+      return;
+    }
+    if (amt > 500000) {
+      setError('O valor máximo por transação é de 500.000 MT.');
       return;
     }
     if (amt > balance) {
-      setError(`Saldo insuficiente. O seu saldo máximo é de ${balance} MT.`);
+      setError(`Saldo insuficiente. O seu saldo disponível é de ${balance} MT.`);
       return;
     }
-    if (withdrawPhone.length < 9) {
-      setError('Introduza um número de telemóvel válido de 9 dígitos.');
+    const cleanPhone = withdrawPhone.replace(/\D/g, '');
+    if (cleanPhone.length < 9) {
+      setError('Introduza um número de telemóvel moçambicano válido (ex: 84/85/86/87).');
       return;
     }
 
@@ -1462,6 +1501,10 @@ const translations = {
     checkOut: "Fazer Check-out (Foto Depois)",
     finishReview: "Concluir & Avaliar",
     paymentSecureDone: "Pagamento Seguro Concluído",
+    quickReschedule: "Reagendamento Rápido",
+    rescheduleUnforeseen: "Reagendar por Imprevisto",
+    unforeseenNotice: "Biscate cancelado por imprevistos",
+    escrowPreserved: "Garantia de pagamento e caução mantidas em segurança",
     helpButton: "Botão de Ajuda (Emergência)",
     setReminder: "Definir Lembrete",
     reminderSet: "Lembrete definido para",
@@ -2402,6 +2445,20 @@ const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt', onPani
   const [paymentSuccess, setPaymentSuccess] = useState(false);
   const [showQrScanner, setShowQrScanner] = useState(false);
 
+  // Quick Reschedule & Cancellation for Unforeseen Events
+  const [showRescheduleModal, setShowRescheduleModal] = useState(false);
+  const [rescheduleDate, setRescheduleDate] = useState(() => {
+    if (job.scheduledFor) return job.scheduledFor;
+    const tomorrow = new Date(Date.now() + 24 * 3600 * 1000);
+    tomorrow.setHours(9, 0, 0, 0);
+    return tomorrow.toISOString().slice(0, 16);
+  });
+  const [rescheduleNote, setRescheduleNote] = useState('');
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelReason, setCancelReason] = useState('Chuva forte / Mau tempo');
+  const [customReason, setCustomReason] = useState('');
+  const [isSubmittingReschedule, setIsSubmittingReschedule] = useState(false);
+
   const sendPanic = () => {
     if (onPanic) {
       onPanic(job);
@@ -2870,6 +2927,271 @@ const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt', onPani
           <CheckCircle2 className="w-4 h-4" /> {t.paymentSecureDone}
         </div>
       )}
+
+      {/* --- Biscate Cancelado por Imprevistos & Reagendamento Rápido --- */}
+      {job.status === 'CANCELADO' && (
+        <div className="mt-4 p-5 bg-gradient-to-br from-amber-50 via-orange-50/50 to-white border-2 border-amber-300 rounded-[2rem] shadow-sm space-y-3">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-amber-700 flex items-center justify-center shrink-0">
+              <RotateCcw className="w-5 h-5 text-amber-600 animate-pulse" />
+            </div>
+            <div className="flex-1">
+              <span className="text-[9px] font-black uppercase tracking-wider text-amber-800 bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-full inline-block mb-1">
+                Biscate Cancelado por Imprevisto
+              </span>
+              <h5 className="text-xs font-black text-natural-heading leading-tight">
+                {job.cancellationReason || 'Cancelado devido a imprevistos'}
+              </h5>
+              <p className="text-[10px] text-amber-900/80 font-semibold mt-1 leading-snug">
+                {job.transactionId || job.previousStatus === 'PAGO' ? (
+                  <>🛡️ <strong>Garantia Escrow Ativa:</strong> O valor de <strong>{job.amount} MT</strong> continua em custódia segura. Pode reagendar sem efetuar novo pagamento.</>
+                ) : (
+                  <>As configurações do biscate ({job.category} • {job.amount} MT) foram preservadas para reagendamento rápido.</>
+                )}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowRescheduleModal(true)}
+            className="w-full py-3.5 px-4 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-800 text-white rounded-2xl font-black text-xs uppercase tracking-wider shadow-md hover:shadow-lg flex items-center justify-center gap-2 transition-all active:scale-98"
+          >
+            <RefreshCw className="w-4 h-4" />
+            <span>Reagendamento Rápido</span>
+          </button>
+        </div>
+      )}
+
+      {/* Opção de Reportar Imprevisto para Biscates em Curso ou Aguardando */}
+      {['AGUARDANDO_DEPOSITO', 'PAGO', 'EM_CURSO'].includes(job.status) && (
+        <div className="mt-3 pt-3 border-t border-natural-line flex items-center justify-between">
+          <span className="text-[9px] font-bold text-natural-muted">Teve chuva ou imprevistos?</span>
+          <button
+            type="button"
+            onClick={() => setShowCancelModal(true)}
+            className="text-[10px] font-black text-amber-700 hover:text-amber-800 flex items-center gap-1 hover:underline"
+          >
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+            <span>Cancelar para Reagendar</span>
+          </button>
+        </div>
+      )}
+
+      {/* Modal: Cancelar por Imprevisto */}
+      <AnimatePresence>
+        {showCancelModal && (
+          <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white max-w-sm w-full p-6 rounded-[2.5rem] shadow-2xl border-2 border-amber-300 space-y-4 max-h-[85vh] overflow-y-auto"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-natural-line">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-amber-50 flex items-center justify-center border border-amber-200">
+                    <AlertTriangle className="w-5 h-5 text-amber-600" />
+                  </div>
+                  <div>
+                    <h4 className="font-black text-sm text-natural-heading leading-tight">Imprevisto no Biscate</h4>
+                    <p className="text-[10px] text-natural-muted font-bold">Cancelar mantendo as configurações</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowCancelModal(false)}
+                  className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-2xl text-[11px] text-amber-900 font-medium leading-relaxed">
+                🛡️ <strong>Atenção:</strong> O valor de <strong>{job.amount} MT</strong> permanece retido em garantia Escrow. Poderá fazer o <strong>Reagendamento Rápido</strong> para qualquer outra data sem pagar novamente!
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-[9px] font-black uppercase tracking-wider text-natural-muted">
+                  Selecione o Motivo do Imprevisto:
+                </label>
+                {[
+                  'Chuva forte / Mau tempo',
+                  'Atraso no transporte / Trânsito extremo (chapa)',
+                  'Corte de energia / Falta de água no local',
+                  'Falta de material ou ferramentas',
+                  'Imprevisto pessoal ou de saúde',
+                  'Outro motivo'
+                ].map((reason) => (
+                  <button
+                    key={reason}
+                    type="button"
+                    onClick={() => setCancelReason(reason)}
+                    className={`w-full p-2.5 text-left rounded-xl text-xs font-bold transition-all border ${
+                      cancelReason === reason
+                        ? 'border-amber-400 bg-amber-50 text-amber-900 shadow-2xs font-black'
+                        : 'border-slate-100 bg-slate-50/70 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    {reason}
+                  </button>
+                ))}
+
+                {cancelReason === 'Outro motivo' && (
+                  <input
+                    type="text"
+                    placeholder="Descreva brevemente o imprevisto..."
+                    value={customReason}
+                    onChange={(e) => setCustomReason(e.target.value)}
+                    className="w-full mt-2 p-3 text-xs bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold text-natural-heading"
+                  />
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCancelModal(false)}
+                  className="py-3 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-black uppercase tracking-wider transition-colors"
+                >
+                  Voltar
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const finalReason = cancelReason === 'Outro motivo' ? (customReason.trim() || 'Outro imprevisto') : cancelReason;
+                    await onAction(job, 'CANCEL_UNFORESEEN', { reason: finalReason });
+                    setShowCancelModal(false);
+                    setShowRescheduleModal(true);
+                  }}
+                  className="py-3 px-3 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-colors shadow-sm"
+                >
+                  Confirmar
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal: Reagendamento Rápido */}
+      <AnimatePresence>
+        {showRescheduleModal && (
+          <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white max-w-sm w-full p-6 rounded-[2.5rem] shadow-2xl border-2 border-emerald-400 space-y-4 max-h-[85vh] overflow-y-auto"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-natural-line">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center border border-emerald-200">
+                    <RefreshCw className="w-5 h-5 animate-spin-reverse" />
+                  </div>
+                  <div>
+                    <h4 className="font-black text-sm text-natural-heading leading-tight">Reagendamento Rápido</h4>
+                    <p className="text-[10px] text-emerald-700 font-bold">Mesmo valor e caução mantidos</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowRescheduleModal(false)}
+                  className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Informações Preservadas */}
+              <div className="p-3.5 bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-2xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] font-black uppercase tracking-wider text-emerald-800">Biscate Original</span>
+                  <span className="text-[9px] font-mono font-bold bg-white px-1.5 py-0.5 rounded border border-emerald-200 text-emerald-900">#{job.id}</span>
+                </div>
+                <p className="text-xs font-black text-emerald-950 leading-tight">{job.category}</p>
+                <div className="flex items-center justify-between pt-1 border-t border-emerald-200/60 text-[10px] font-bold text-emerald-900">
+                  <span>Valor Mantido:</span>
+                  <span className="text-sm font-black text-emerald-700">{job.amount} MT</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-[9px] text-emerald-800 font-bold">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>Caução e configurações protegidas em Escrow</span>
+                </div>
+              </div>
+
+              {/* Seletor de Nova Data e Hora */}
+              <div className="space-y-1">
+                <label className="block text-[10px] font-black uppercase tracking-wider text-natural-muted">
+                  Nova Data e Hora Pretendida *
+                </label>
+                <div className="flex items-center gap-2 p-3 bg-slate-50 border border-natural-line rounded-xl focus-within:border-emerald-600 focus-within:bg-white transition-all">
+                  <CalendarClock className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <input
+                    type="datetime-local"
+                    required
+                    min={new Date().toISOString().slice(0, 16)}
+                    value={rescheduleDate}
+                    onChange={(e) => setRescheduleDate(e.target.value)}
+                    className="w-full text-xs font-bold text-natural-heading bg-transparent outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Nota / Acordo prévio */}
+              <div className="space-y-1">
+                <label className="block text-[10px] font-black uppercase tracking-wider text-natural-muted">
+                  Observações / Combinado prévio (Opcional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ex: Combinado para logo pela manhã após o tempo abrir"
+                  value={rescheduleNote}
+                  onChange={(e) => setRescheduleNote(e.target.value)}
+                  className="w-full p-3 text-xs bg-slate-50 border border-natural-line rounded-xl outline-none font-semibold text-natural-heading focus:border-emerald-600 focus:bg-white transition-all"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowRescheduleModal(false)}
+                  className="py-3 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-black uppercase tracking-wider transition-colors"
+                >
+                  Voltar
+                </button>
+                <button
+                  type="button"
+                  disabled={!rescheduleDate || isSubmittingReschedule}
+                  onClick={async () => {
+                    if (!rescheduleDate) return;
+                    setIsSubmittingReschedule(true);
+                    try {
+                      await onAction(job, 'QUICK_RESCHEDULE', {
+                        newDateTime: rescheduleDate,
+                        note: rescheduleNote.trim()
+                      });
+                      setShowRescheduleModal(false);
+                    } finally {
+                      setIsSubmittingReschedule(false);
+                    }
+                  }}
+                  className="py-3 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-colors shadow-md disabled:opacity-50 flex items-center justify-center gap-1.5"
+                >
+                  {isSubmittingReschedule ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Confirmar</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 });
@@ -5200,7 +5522,7 @@ function MainApp() {
   }, [t]);
 
   useEffect(() => {
-    if (view === 'app' && role) {
+    if (view === 'app') {
       if ('geolocation' in navigator) {
         navigator.geolocation.getCurrentPosition(
           (pos) => {
@@ -5209,9 +5531,19 @@ function MainApp() {
           (err) => console.warn("Location warning (using default Maputo coords):", err.message),
           { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
         );
+
+        const watchId = navigator.geolocation.watchPosition(
+          (pos) => {
+            setUserLocation([pos.coords.latitude, pos.coords.longitude]);
+          },
+          () => {},
+          { enableHighAccuracy: false, timeout: 20000, maximumAge: 30000 }
+        );
+
+        return () => navigator.geolocation.clearWatch(watchId);
       }
     }
-  }, [view, role]);
+  }, [view]);
 
   useEffect(() => {
     if (view === 'app' && role === 'worker' && jobs.length > 0) {
@@ -5405,16 +5737,16 @@ function MainApp() {
   }, [currentUser?.uid]);
 
   useEffect(() => {
-    if (role === 'worker' && typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission().catch(() => {});
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().then(perm => setNotifPermission(perm)).catch(() => {});
     }
   }, [role]);
 
   const handleRoleSelection = async (r: 'client' | 'worker' | 'admin') => {
     if (!currentUser) return;
     setRole(r);
-    if (r === 'worker' && typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission().catch(() => {});
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().then(perm => setNotifPermission(perm)).catch(() => {});
     }
     try {
       await setDoc(doc(db, 'users', currentUser.uid), {
@@ -5444,16 +5776,179 @@ function MainApp() {
   };
 
   const [rawProviders, setRawProviders] = useState<Provider[]>([]);
+  const isFirstProvidersSyncRef = useRef(true);
+  const notifiedNearbyProvidersRef = useRef<Set<string>>(new Set());
 
+  // Restore already notified providers from sessionStorage
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem('mozbiscates-notified-providers');
+      if (saved) {
+        const ids = JSON.parse(saved);
+        if (Array.isArray(ids)) {
+          ids.forEach((id: string) => notifiedNearbyProvidersRef.current.add(id));
+        }
+      }
+    } catch(e) {}
+  }, []);
+
+  // Proximity check function: notifies client when a verified provider is within 5km radius (Haversine)
+  const checkAndNotifyNearbyProvider = useCallback((provider: Provider, userCoords: [number, number], isInitialSync = false) => {
+    if (!provider || !provider.verified) return;
+    if (currentUser && provider.id === currentUser.uid) return;
+
+    const coords = getProviderCoordinates(provider.id, userCoords);
+    const distKm = calculateHaversineDistanceKm(userCoords, coords);
+
+    // 5km radius check using Haversine formula
+    if (distKm <= 5.0) {
+      if (!notifiedNearbyProvidersRef.current.has(provider.id)) {
+        notifiedNearbyProvidersRef.current.add(provider.id);
+        try {
+          sessionStorage.setItem(
+            'mozbiscates-notified-providers',
+            JSON.stringify(Array.from(notifiedNearbyProvidersRef.current))
+          );
+        } catch(e) {}
+
+        // Suppress sound & alert popups on the very initial baseline sync
+        if (isInitialSync) return;
+
+        const distFormatted = distKm < 1 ? `${Math.round(distKm * 1000)} m` : `${distKm.toFixed(1)} km`;
+        const title = "📍 Novo Prestador Verificado por Perto!";
+        const body = `${provider.name} (${provider.category}) está agora a ${distFormatted} de si em ${provider.bairro || 'sua zona'}! Toque para ver o perfil.`;
+
+        // 1. Browser Notification API (Web Push / Local Notification)
+        sendLocalNotification(title, {
+          body,
+          icon: provider.photo || NOTIFICATION_ICON,
+          badge: NOTIFICATION_ICON,
+          tag: `nearby-provider-${provider.id}`,
+          data: { providerId: provider.id, type: 'nearby_provider' }
+        });
+
+        // 2. Play audio notification
+        try {
+          const audio = new Audio(NOTIFICATION_SOUND);
+          audio.volume = 0.5;
+          audio.play().catch(() => {});
+        } catch (e) {}
+
+        // 3. In-App Notification Toast
+        setNotification({
+          title,
+          body
+        });
+        setTimeout(() => setNotification(null), 10000);
+      }
+    }
+  }, [currentUser]);
+
+  // Real-time Firestore query for workers with real-time change detection
   useEffect(() => {
     if (!currentUser || role !== 'client') return;
     const q = query(collection(db, 'users'), where('role', '==', 'worker'), limit(100));
     const unsubscribe = onSnapshot(q, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as any));
       setRawProviders(data);
+
+      // Check document changes for newly added or newly verified workers
+      snap.docChanges().forEach((change) => {
+        const p = { id: change.doc.id, ...change.doc.data() } as Provider;
+        if (p.verified && (change.type === 'added' || change.type === 'modified')) {
+          checkAndNotifyNearbyProvider(p, userLocation, isFirstProvidersSyncRef.current);
+        }
+      });
+      isFirstProvidersSyncRef.current = false;
     }, (err) => handleFirestoreError(err, OperationType.LIST, 'users'));
     return () => unsubscribe();
-  }, [currentUser?.uid, role]);
+  }, [currentUser?.uid, role, userLocation, checkAndNotifyNearbyProvider]);
+
+  // Periodic background check every 20 seconds for verified providers within 5km as GPS location evolves
+  useEffect(() => {
+    if (role !== 'client' || rawProviders.length === 0) return;
+
+    const interval = setInterval(() => {
+      rawProviders.forEach((p) => {
+        if (p.verified) {
+          checkAndNotifyNearbyProvider(p, userLocation, false);
+        }
+      });
+    }, 20000);
+
+    return () => clearInterval(interval);
+  }, [role, rawProviders, userLocation, checkAndNotifyNearbyProvider]);
+
+  // Listen for notification click events to automatically open provider profile
+  useEffect(() => {
+    const handleOpenProvider = (e: any) => {
+      const providerId = e.detail;
+      const p = rawProviders.find(item => item.id === providerId);
+      if (p) {
+        handleSelectProvider(p);
+      }
+    };
+
+    window.addEventListener('open-provider', handleOpenProvider);
+    return () => window.removeEventListener('open-provider', handleOpenProvider);
+  }, [rawProviders]);
+
+  // Listen to Service Worker messages for background notification clicks
+  useEffect(() => {
+    const handleSwMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'open-provider' && event.data?.providerId) {
+        const p = rawProviders.find(item => item.id === event.data.providerId);
+        if (p) {
+          handleSelectProvider(p);
+        }
+      }
+    };
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleSwMessage);
+      return () => navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+    }
+  }, [rawProviders]);
+
+  const handleSimulateNearbyProviderAlert = () => {
+    const candidate = rawProviders.find(p => p.verified) || rawProviders[0] || {
+      id: 'demo-worker-nearby',
+      name: 'Salomão Cossa',
+      category: 'Eletricista Auto & Residencial',
+      bairro: 'Polana Caniço',
+      rating: 4.9,
+      verified: true,
+      jobs: 38,
+      photo: 'https://images.unsplash.com/photo-1540569014015-19a7be504e3a?w=400&auto=format&fit=crop&q=80',
+      level: 3
+    } as Provider;
+
+    const coords = getProviderCoordinates(candidate.id, userLocation);
+    const distKm = calculateHaversineDistanceKm(userLocation, coords);
+    const distFormatted = distKm < 1 ? `${Math.round(distKm * 1000)} m` : `${distKm.toFixed(1)} km`;
+
+    const title = "📍 Novo Prestador Verificado por Perto!";
+    const body = `${candidate.name} (${candidate.category}) está disponível a apenas ${distFormatted} de si (em ${candidate.bairro || 'sua zona'})! Toque para ver o perfil.`;
+
+    sendLocalNotification(title, {
+      body,
+      icon: candidate.photo || NOTIFICATION_ICON,
+      badge: NOTIFICATION_ICON,
+      tag: `nearby-provider-${candidate.id}`,
+      data: { providerId: candidate.id, type: 'nearby_provider' }
+    });
+
+    try {
+      const audio = new Audio(NOTIFICATION_SOUND);
+      audio.volume = 0.5;
+      audio.play().catch(() => {});
+    } catch(e) {}
+
+    setNotification({
+      title,
+      body
+    });
+    setTimeout(() => setNotification(null), 10000);
+  };
 
   const filteredProviders = useMemo(() => {
     let data = [...rawProviders];
@@ -5598,21 +6093,29 @@ function MainApp() {
 
   const handleStartBiscate = async (p: Provider) => {
     if (!currentUser) return;
+    const parsedAmount = Math.round(Number(bookingAmount));
+    if (isNaN(parsedAmount) || parsedAmount < 50 || parsedAmount > 500000) {
+      alert("Por favor, introduza um valor válido para o biscate (entre 50 MT e 500.000 MT).");
+      return;
+    }
     if (bookingType === 'scheduled' && !bookingDateTime) {
       alert("Por favor, selecione a data e hora para o agendamento.");
       return;
     }
+    // Sanitize description to prevent script injections
+    const sanitizedDesc = (bookingDesc || '').replace(/[<>]/g, '').trim().slice(0, 500);
+
     try {
       await addDoc(collection(db, 'jobs'), {
         providerId: p.id,
-        category: p.category,
+        category: p.category.slice(0, 60),
         clientId: currentUser.uid,
-        clientName: userData?.fullName || 'Cliente',
-        providerName: p.name,
-        bairro: userData?.bairro || bairro || '',
-        amount: Number(bookingAmount),
-        description: bookingDesc,
-        bookingType: bookingType,
+        clientName: (userData?.fullName || 'Cliente').slice(0, 100),
+        providerName: p.name.slice(0, 100),
+        bairro: (userData?.bairro || bairro || '').slice(0, 60),
+        amount: parsedAmount,
+        description: sanitizedDesc,
+        bookingType: bookingType === 'scheduled' ? 'scheduled' : 'immediate',
         scheduledFor: bookingType === 'scheduled' ? bookingDateTime : null,
         status: 'AGUARDANDO_DEPOSITO',
         createdAt: serverTimestamp(),
@@ -5721,6 +6224,14 @@ function MainApp() {
         update.photoAfter = data.photo || "https://picsum.photos/seed/after/400/300";
         break;
       case 'CONFIRM_CLIENT':
+        if (job.status === 'CONCLUIDO') {
+          console.warn("Biscate já foi concluído anteriormente. Operação ignorada para evitar duplicações.");
+          return;
+        }
+        if (!job.amount || job.amount < 50 || job.amount > 500000) {
+          console.error("Valor do trabalho inválido para liquidação de pagamento.");
+          return;
+        }
         update.status = 'CONCLUIDO';
         const fee = job.amount * 0.1;
         const netAmount = Math.round(job.amount - fee);
@@ -5767,6 +6278,35 @@ function MainApp() {
       case 'PANIC':
         update.panicAlert = true;
         update.panicLocation = data.location;
+        break;
+      case 'CANCEL_UNFORESEEN':
+        update.status = 'CANCELADO';
+        update.cancellationReason = data.reason || 'Imprevisto inevitável';
+        update.previousStatus = job.status || 'AGUARDANDO_DEPOSITO';
+        update.cancelledBy = currentUser?.uid || '';
+        await addDoc(collection(db, 'jobs', job.id, 'messages'), {
+          senderId: 'system',
+          text: `⚠️ Biscate cancelado devido a imprevisto: "${data.reason || 'Força maior'}". A caução de pagamento (${job.amount} MT) permanece salvaguardada em garantia Escrow para Reagendamento Rápido.`,
+          createdAt: serverTimestamp()
+        }).catch(err => console.error("Error adding cancel system message:", err));
+        break;
+      case 'QUICK_RESCHEDULE':
+        // Restore status while preserving exact payment configurations
+        const wasPaid = (job.previousStatus === 'PAGO' || job.status === 'PAGO' || !!job.transactionId);
+        update.status = wasPaid ? 'PAGO' : 'AGUARDANDO_DEPOSITO';
+        update.scheduledFor = data.newDateTime;
+        update.bookingType = 'scheduled';
+        update.cancellationReason = null;
+        update.rescheduledAt = serverTimestamp();
+        if (data.note) {
+          update.rescheduleNote = data.note;
+        }
+        const formattedDateStr = data.newDateTime ? new Date(data.newDateTime).toLocaleString('pt-MZ', { dateStyle: 'short', timeStyle: 'short' }) : 'Nova data';
+        await addDoc(collection(db, 'jobs', job.id, 'messages'), {
+          senderId: 'system',
+          text: `🔄 Biscate Reagendado com Sucesso para ${formattedDateStr}! A caução de pagamento (${job.amount} MT) e as condições foram mantidas intactas sem custos adicionais.`,
+          createdAt: serverTimestamp()
+        }).catch(err => console.error("Error adding reschedule system message:", err));
         break;
     }
 
@@ -6257,6 +6797,26 @@ function MainApp() {
 
                  {/* Filters */}
                  <div className="flex gap-2 mb-8 overflow-x-auto no-scrollbar pb-2">
+                    <button 
+                      onClick={async () => {
+                        if ('Notification' in window && Notification.permission !== 'granted') {
+                          const res = await Notification.requestPermission();
+                          setNotifPermission(res);
+                        } else {
+                          handleSimulateNearbyProviderAlert();
+                        }
+                      }}
+                      className={`shrink-0 px-3.5 py-2 rounded-xl text-[10px] font-black uppercase transition-all border-2 flex items-center gap-1.5 ${
+                        notifPermission === 'granted'
+                          ? 'bg-amber-50 border-amber-300 text-amber-900 shadow-2xs'
+                          : 'bg-white border-dashed border-amber-400 text-amber-800'
+                      }`}
+                      title={notifPermission === 'granted' ? "Radar 5km ativo: Notifica no browser se novo prestador verificado estiver próximo (Toque para testar)" : "Toque para autorizar notificações de prestadores a menos de 5km"}
+                    >
+                      <Bell className={`w-3.5 h-3.5 ${notifPermission === 'granted' ? 'text-amber-600' : 'text-amber-500 animate-pulse'}`} />
+                      <span>{notifPermission === 'granted' ? 'Radar 5km Ativo 🔔' : 'Ativar Radar 5km'}</span>
+                    </button>
+
                     <button 
                       onClick={() => setOnlyVerified(!onlyVerified)}
                       className={`shrink-0 px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all border-2 ${onlyVerified ? 'bg-natural-success border-natural-success text-white' : 'bg-white border-natural-line text-natural-muted'}`}
