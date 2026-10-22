@@ -2,7 +2,7 @@
   "entities": {
     "User": {
       "title": "User Profile",
-      "description": "User profile information",
+      "description": "Public user profile information for workers and clients",
       "type": "object",
       "properties": {
         "uid": { "type": "string" },
@@ -10,16 +10,38 @@
         "role": { "type": "string", "enum": ["client", "worker", "admin"] },
         "email": { "type": "string" },
         "category": { "type": "string" },
+        "specialty": { "type": "string" },
+        "specialties": { "type": "array" },
         "bairro": { "type": "string" },
+        "city": { "type": "string" },
         "verified": { "type": "boolean" },
         "level": { "type": "number" },
         "jobs": { "type": "number" },
         "balance": { "type": "number" },
         "phone": { "type": "string" },
         "photo": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "portfolio": { "type": "array" },
+        "rating": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "fullName", "role", "email"]
+    },
+    "UserPrivateSecurity": {
+      "title": "User Private Security Document",
+      "description": "Sensitive identity and emergency contact data readable only by the owner or admin",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "biPhoto": { "type": "string" },
+        "biSelfie": { "type": "string" },
+        "nuit": { "type": "string" },
+        "emergencyContactName": { "type": "string" },
+        "emergencyContactPhone": { "type": "string" },
+        "verified": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId"]
     },
     "Job": {
       "title": "Job Request",
@@ -66,11 +88,12 @@
       "description": "A review for a provider",
       "type": "object",
       "properties": {
-         "rating": { "type": "number" },
-         "comment": { "type": "string" },
-         "authorId": { "type": "string" },
-         "date": { "type": "string", "format": "date-time" }
-      }
+        "rating": { "type": "number" },
+        "comment": { "type": "string" },
+        "authorId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["rating", "authorId"]
     },
     "EmergencyAlert": {
       "title": "Emergency Alert",
@@ -89,7 +112,11 @@
   "firestore": {
     "users/{userId}": {
       "schema": "User",
-      "description": "Public and private user profile data"
+      "description": "Public user profile data"
+    },
+    "users/{userId}/private_profile/security": {
+      "schema": "UserPrivateSecurity",
+      "description": "Sensitive PII and emergency details restricted to owner and admin"
     },
     "jobs/{jobId}": {
       "schema": "Job",

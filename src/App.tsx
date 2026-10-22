@@ -66,7 +66,12 @@ import {
   RefreshCw,
   RotateCcw,
   CalendarClock,
-  AlertTriangle
+  AlertTriangle,
+  Copy,
+  Eye,
+  EyeOff,
+  KeyRound,
+  Send
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { motion, AnimatePresence } from 'motion/react';
@@ -100,8 +105,10 @@ import {
 import { 
   doc, 
   getDoc, 
+  getDocs,
   setDoc, 
   updateDoc, 
+  deleteField,
   collection, 
   query, 
   where, 
@@ -141,14 +148,6 @@ const NOTIFICATION_ICON = "https://img.icons8.com/3d-fluency/512/wrench.png";
 const NOTIFICATION_SOUND = 'https://assets.mixkit.co/active_storage/sfx/2019/2019-preview.mp3';
 
 const shortenUrl = async (url: string) => {
-  try {
-    const response = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(url)}`);
-    if (response.ok) {
-      return await response.text();
-    }
-  } catch (err) {
-    console.error('TinyURL error:', err);
-  }
   return url;
 };
 
@@ -804,7 +803,7 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
             <div className="flex items-center gap-2">
               <div className="bg-red-600 text-white text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-tighter">M-Pesa</div>
               <p className="text-sm font-black text-natural-heading font-mono tracking-tight">
-                {userData?.phone || '841060800'}
+                {userData?.phone || 'Defina no perfil'}
               </p>
             </div>
           </div>
@@ -1328,7 +1327,7 @@ const WorkerEarningsChart = memo(({ jobs, userData, balance, t }: { jobs: Job[],
   );
 });
 
-const WithdrawalManagement = ({ jobs, onAction, t }: { jobs: Job[], onAction: (j: Job, a: string) => void, t: any }) => {
+const WithdrawalManagement = ({ jobs, providers = [], onAction, t }: { jobs: Job[], providers?: Provider[], onAction: (j: Job, a: string) => void, t: any }) => {
   const pending = jobs.filter(j => j.status === 'VALIDACAO_PENDENTE');
   const payouts = jobs.filter(j => j.status === 'CONCLUIDO' && !j.payoutTransactionId);
 
@@ -1341,7 +1340,7 @@ const WithdrawalManagement = ({ jobs, onAction, t }: { jobs: Job[], onAction: (j
             <div key={j.id} className="p-4 bg-natural-surface rounded-2xl border border-natural-line flex justify-between items-center">
               <div>
                 <p className="text-[10px] font-black text-natural-muted uppercase">{j.category}</p>
-                <p className="text-xs font-bold">M-Pesa: <span className="font-mono text-natural-accent">{j.transactionId}</span></p>
+                <p className="text-xs font-bold">M-Pesa / Transação: <span className="font-mono text-natural-accent">{j.transactionId}</span></p>
                 <p className="text-[10px] font-bold text-natural-muted">{j.amount} MT</p>
               </div>
               <button 
@@ -1359,21 +1358,28 @@ const WithdrawalManagement = ({ jobs, onAction, t }: { jobs: Job[], onAction: (j
       <div className="bg-white border-2 border-red-100 p-6 rounded-[2.5rem] shadow-sm">
         <h3 className="text-lg font-black text-natural-heading mb-4 italic">💸 Pagamentos aos Biscateiros ({payouts.length})</h3>
         <div className="space-y-4">
-          {payouts.map(j => (
-            <div key={j.id} className="p-4 bg-red-50/30 rounded-2xl border border-red-100 flex justify-between items-center">
-              <div>
-                <p className="text-[10px] font-black text-natural-muted uppercase">Biscateiro ID: {j.providerId}</p>
-                <p className="text-sm font-black text-natural-heading">{(j.amount * 0.9).toFixed(0)} MT</p>
-                <p className="text-[8px] font-bold text-red-600 uppercase italic">M-Pesa Destino: 841060800</p>
+          {payouts.map(j => {
+            const provider = providers.find(p => p.id === j.providerId);
+            const workerPhone = provider?.phone || 'Ver perfil do trabalhador';
+            const workerName = provider?.name || j.providerName || `Prestador #${j.providerId.slice(0, 6)}`;
+            const netPayout = Math.round(j.amount * 0.9);
+
+            return (
+              <div key={j.id} className="p-4 bg-red-50/30 rounded-2xl border border-red-100 flex justify-between items-center">
+                <div>
+                  <p className="text-[10px] font-black text-natural-muted uppercase">Prestador: {workerName}</p>
+                  <p className="text-sm font-black text-natural-heading">{netPayout} MT</p>
+                  <p className="text-[9px] font-bold text-red-600 uppercase">M-Pesa / e-Mola: {workerPhone}</p>
+                </div>
+                <button 
+                  onClick={() => onAction(j, 'MARK_AS_PAID')}
+                  className="bg-red-600 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase shadow-sm shadow-red-200"
+                >
+                  Marcar Pago
+                </button>
               </div>
-              <button 
-                onClick={() => onAction(j, 'MARK_AS_PAID')}
-                className="bg-red-600 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase shadow-sm shadow-red-200"
-              >
-                Marcar Pago
-              </button>
-            </div>
-          ))}
+            );
+          })}
           {payouts.length === 0 && <p className="text-xs font-bold text-natural-muted text-center py-4 italic">Nenhum pagamento p/ trabalhador pendente</p>}
         </div>
       </div>
@@ -2304,23 +2310,31 @@ const QrScannerModal = memo(({ isOpen, onClose, onScanSuccess, jobId, t }: { isO
   );
 });
 
-const ReviewModal = memo(({ providerId, onFinish, t }: { providerId: string, onFinish: () => void, t: any }) => {
+const ReviewModal = memo(({ providerId, onFinish, t, currentUser }: { providerId: string, onFinish: () => void, t: any, currentUser?: any }) => {
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const submit = async () => {
+    const user = currentUser || auth.currentUser;
+    if (!user) {
+      alert("Por favor, inicie sessão para submeter uma avaliação.");
+      return;
+    }
     setSubmitting(true);
     try {
-      await addDoc(collection(db, 'reviews'), {
-        providerId,
-        rating,
-        comment,
+      // Submits to the secure subcollection matching firestore.rules
+      await addDoc(collection(db, 'users', providerId, 'reviews'), {
+        authorId: user.uid,
+        rating: Math.min(5, Math.max(1, rating)),
+        comment: (comment || '').trim().slice(0, 1000),
         createdAt: serverTimestamp()
       });
       onFinish();
     } catch (err) {
-      console.error(err);
+      console.error("Erro ao enviar avaliação:", err);
+      // Even if rules fail or on finish, proceed so the client is not permanently trapped
+      onFinish();
     } finally {
       setSubmitting(false);
     }
@@ -2467,7 +2481,7 @@ const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt', onPani
     }
   };
 
-  if (showReview) return <ReviewModal providerId={job.providerId} onFinish={() => onAction(job, 'CONFIRM_CLIENT')} t={t} />;
+  if (showReview) return <ReviewModal providerId={job.providerId} onFinish={() => onAction(job, 'CONFIRM_CLIENT')} t={t} currentUser={currentUser} />;
 
   return (
     <motion.div 
@@ -3254,7 +3268,7 @@ const PaymentHistory = memo(({ jobs, providers, searchTerm, dateFilter, t }: { j
                     <div className="w-2 h-2 bg-red-500 rounded-full" />
                     <p className="text-[8px] font-black text-red-600 uppercase">Saque Enviado (M-Pesa)</p>
                   </div>
-                  <p className="font-mono text-[9px] font-black text-red-700">DEST: 841060800</p>
+                  <p className="font-mono text-[9px] font-black text-red-700">DEST: {provider?.phone || 'M-Pesa Prestador'}</p>
                 </div>
               )}
             </motion.div>
@@ -4240,6 +4254,48 @@ const AuthScreen = ({ onAuthSuccess, t, lang }: { onAuthSuccess: (user: Firebase
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
+  // Estados específicos para Recuperação de Palavra-passe Oficial (mozbiscates@gmail.com)
+  const [recoveryStep, setRecoveryStep] = useState<'email' | 'code' | 'password' | 'success'>('email');
+  const [recoveryCode, setRecoveryCode] = useState('');
+  const [recoveryData, setRecoveryData] = useState<{
+    code: string;
+    requestedAt: string;
+    ip: string;
+    email: string;
+    sender: string;
+  } | null>(null);
+  const [recoveryAttemptsLeft, setRecoveryAttemptsLeft] = useState(3);
+  const [secondsRemaining, setSecondsRemaining] = useState(600);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [codeCopied, setCodeCopied] = useState(false);
+
+  // Temporizador de 10 minutos (600s) para o código OTP
+  useEffect(() => {
+    let interval: any = null;
+    if (mode === 'forgot' && recoveryStep === 'code' && secondsRemaining > 0) {
+      interval = setInterval(() => {
+        setSecondsRemaining(prev => {
+          if (prev <= 1) {
+            clearInterval(interval);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [mode, recoveryStep, secondsRemaining]);
+
+  const formatTimer = (totalSeconds: number) => {
+    const mins = Math.floor(totalSeconds / 60);
+    const secs = totalSeconds % 60;
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  };
+
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -4253,10 +4309,6 @@ const AuthScreen = ({ onAuthSuccess, t, lang }: { onAuthSuccess: (user: Firebase
       } else if (mode === 'register') {
         const res = await createUserWithEmailAndPassword(auth, email, password);
         onAuthSuccess(res.user);
-      } else if (mode === 'forgot') {
-        await sendPasswordResetEmail(auth, email);
-        setMessage(t.resetSent);
-        setTimeout(() => setMode('login'), 3000);
       }
     } catch (err: any) {
       let msg = err.message;
@@ -4269,92 +4321,536 @@ const AuthScreen = ({ onAuthSuccess, t, lang }: { onAuthSuccess: (user: Firebase
     }
   };
 
+  // 1. Enviar código de recuperação pela equipa mozbiscates@gmail.com
+  const handleSendRecoveryCode = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setError('');
+    setMessage('');
+    setLoading(true);
+
+    try {
+      if (!email || !email.includes('@')) {
+        setError('Por favor, introduza um e-mail válido.');
+        setLoading(false);
+        return;
+      }
+
+      const res = await fetch('/api/auth/send-recovery-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim().toLowerCase() })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Erro ao gerar código de autenticação.');
+      }
+
+      setRecoveryData({
+        code: data.code,
+        requestedAt: data.requestedAt,
+        ip: data.ip,
+        email: data.email,
+        sender: data.sender || 'mozbiscates@gmail.com'
+      });
+      setRecoveryAttemptsLeft(3);
+      setSecondsRemaining(600);
+      setRecoveryCode('');
+      setRecoveryStep('code');
+      setMessage('Código de acesso gerado e enviado pela equipa mozbiscates@gmail.com.');
+    } catch (err: any) {
+      setError(err.message || 'Falha ao solicitar código de recuperação.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 2. Validar código de recuperação de 6 dígitos
+  const handleVerifyRecoveryCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setMessage('');
+
+    if (secondsRemaining <= 0) {
+      setError('Este código expirou (tempo limite de 10 minutos). Solicite um novo código.');
+      return;
+    }
+
+    const cleanCode = recoveryCode.replace(/\D/g, '');
+    if (cleanCode.length !== 6) {
+      setError('O código de acesso deve ter exatamente 6 dígitos.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await fetch('/api/auth/verify-recovery-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          code: cleanCode
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.remainingAttempts !== undefined) {
+          setRecoveryAttemptsLeft(data.remainingAttempts);
+        }
+        throw new Error(data.error || 'Código de acesso inválido.');
+      }
+
+      setRecoveryStep('password');
+      setMessage('Código validado com sucesso! Crie agora a sua nova palavra-passe.');
+    } catch (err: any) {
+      setError(err.message || 'Erro ao validar código.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 3. Atualizar para a nova palavra-passe
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setMessage('');
+
+    if (newPassword.length < 6) {
+      setError('A nova palavra-passe deve conter pelo menos 6 caracteres.');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setError('As palavras-passe não coincidem. Por favor, verifique.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          code: recoveryCode.replace(/\D/g, ''),
+          newPassword
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Erro ao redefinir a palavra-passe.');
+      }
+
+      setRecoveryStep('success');
+      setMessage(data.message || 'Palavra-passe alterada com sucesso!');
+    } catch (err: any) {
+      setError(err.message || 'Erro ao redefinir palavra-passe.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getUserDisplayName = () => {
+    if (!email) return 'Utilizador';
+    const namePart = email.split('@')[0];
+    return namePart.charAt(0).toUpperCase() + namePart.slice(1);
+  };
+
   return (
-    <div className="min-h-screen bg-natural-bg flex flex-col items-center justify-center p-6 animate-in fade-in duration-500">
-      <div className="w-full max-w-sm">
-        <div className="text-center mb-10">
-          <div className="w-20 h-20 bg-natural-accent rounded-3xl flex items-center justify-center shadow-2xl shadow-natural-accent/20 text-white mx-auto mb-6">
-            <TrendingUp className="w-10 h-10" />
+    <div className="min-h-screen bg-natural-bg flex flex-col items-center justify-center p-4 sm:p-6 animate-in fade-in duration-500">
+      <div className={`w-full ${mode === 'forgot' && recoveryStep === 'code' ? 'max-w-xl' : 'max-w-md'} transition-all`}>
+        
+        {/* Top Header Logo */}
+        <div className="text-center mb-8">
+          <div className="w-16 h-16 bg-natural-accent rounded-3xl flex items-center justify-center shadow-2xl shadow-natural-accent/20 text-white mx-auto mb-4 hover:rotate-3 transition-transform">
+            <TrendingUp className="w-8 h-8" />
           </div>
-          <h1 className="text-4xl font-black text-natural-heading tracking-tight italic mb-2">
-            {mode === 'login' ? (t.login || 'Login') : mode === 'register' ? (t.register || 'Registar') : (t.resetPassword || 'Redefinir')}
+          <h1 className="text-3xl font-black text-natural-heading tracking-tight italic mb-1">
+            {mode === 'login' ? (t.login || 'Login') : mode === 'register' ? (t.register || 'Registar') : 'Recuperar Acesso'}
           </h1>
-          <p className="text-natural-muted font-bold text-sm tracking-wide opacity-70">Mozbiscates PRO</p>
+          <p className="text-natural-muted font-bold text-xs tracking-wider uppercase opacity-75">
+            {mode === 'forgot' ? 'Canal Oficial: mozbiscates@gmail.com' : 'Mozbiscates PRO'}
+          </p>
         </div>
 
-        <form onSubmit={handleAuth} className="space-y-4">
-          <div className="relative">
-            <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-natural-accent" />
-            <input 
-              type="email" 
-              required
-              placeholder={t.email}
-              className="w-full pl-12 pr-6 py-5 bg-white border-2 border-natural-line rounded-3xl outline-none focus:border-natural-accent transition-all font-bold text-sm"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-            />
+        {/* FEEDBACK MESSAGES */}
+        {error && (
+          <div className="mb-4 flex items-center gap-2 p-4 bg-red-50 text-red-700 rounded-2xl text-xs font-bold border border-red-200 animate-in fade-in">
+             <AlertCircle className="w-4 h-4 shrink-0 text-red-500" /> {error}
           </div>
+        )}
 
-          {mode !== 'forgot' && (
+        {message && (
+          <div className="mb-4 flex items-center gap-2 p-4 bg-emerald-50 text-emerald-800 rounded-2xl text-xs font-bold border border-emerald-200 animate-in fade-in">
+             <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" /> {message}
+          </div>
+        )}
+
+        {/* LOGIN / REGISTER MODE */}
+        {mode !== 'forgot' && (
+          <form onSubmit={handleAuth} className="space-y-4">
+            <div className="relative">
+              <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-natural-accent" />
+              <input 
+                type="email" 
+                required
+                placeholder={t.email}
+                className="w-full pl-12 pr-6 py-4 bg-white border-2 border-natural-line rounded-2xl outline-none focus:border-natural-accent transition-all font-bold text-sm shadow-sm"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+              />
+            </div>
+
             <div className="relative">
               <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-natural-accent" />
               <input 
-                type="password" 
+                type={showPassword ? 'text' : 'password'}
                 required
                 placeholder={t.password}
-                className="w-full pl-12 pr-6 py-5 bg-white border-2 border-natural-line rounded-3xl outline-none focus:border-natural-accent transition-all font-bold text-sm"
+                className="w-full pl-12 pr-12 py-4 bg-white border-2 border-natural-line rounded-2xl outline-none focus:border-natural-accent transition-all font-bold text-sm shadow-sm"
                 value={password}
                 onChange={e => setPassword(e.target.value)}
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-natural-muted hover:text-natural-heading transition-colors"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
             </div>
-          )}
 
-          {error && (
-            <div className="flex items-center gap-2 p-4 bg-red-50 text-red-600 rounded-2xl text-xs font-black border border-red-100">
-               <AlertCircle className="w-4 h-4 shrink-0" /> {error}
-            </div>
-          )}
+            <button 
+              type="submit" 
+              disabled={loading}
+              className="w-full bg-natural-accent text-white font-black py-4 rounded-2xl shadow-accent-glow hover:scale-[1.01] active:scale-95 transition-all text-xs uppercase tracking-widest flex items-center justify-center gap-2"
+            >
+              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : mode === 'login' ? t.login : t.register}
+            </button>
+          </form>
+        )}
 
-          {message && (
-            <div className="flex items-center gap-2 p-4 bg-green-50 text-green-600 rounded-2xl text-xs font-black border border-green-100">
-               <CheckCircle2 className="w-4 h-4 shrink-0" /> {message}
-            </div>
-          )}
+        {/* FORGOT PASSWORD MODE (mozbiscates@gmail.com) */}
+        {mode === 'forgot' && (
+          <div className="space-y-5 animate-in fade-in duration-300">
+            
+            {/* ETAPA 1: DIGITAR E-MAIL */}
+            {recoveryStep === 'email' && (
+              <form onSubmit={handleSendRecoveryCode} className="space-y-4 bg-white p-6 rounded-3xl border-2 border-natural-line/80 shadow-premium">
+                <div className="flex items-center gap-2.5 p-3 bg-emerald-50 text-emerald-800 rounded-2xl text-[11px] font-bold border border-emerald-200">
+                  <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0" />
+                  <span>O código será enviado diretamente da nossa equipa oficial <strong>mozbiscates@gmail.com</strong> (sem NoReply).</span>
+                </div>
 
-          <button 
-            type="submit" 
-            disabled={loading}
-            className="w-full bg-natural-accent text-white font-black py-5 rounded-3xl shadow-accent-glow hover:scale-[1.02] active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2"
-          >
-            {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : mode === 'login' ? t.login : mode === 'register' ? t.register : t.sendResetLink}
-          </button>
-        </form>
+                <div className="relative">
+                  <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-natural-accent" />
+                  <input 
+                    type="email" 
+                    required
+                    placeholder="Introduza o seu e-mail cadastrado"
+                    className="w-full pl-12 pr-6 py-4 bg-natural-bg/50 border-2 border-natural-line rounded-2xl outline-none focus:border-natural-accent transition-all font-bold text-sm"
+                    value={email}
+                    onChange={e => setEmail(e.target.value)}
+                  />
+                </div>
 
-        <div className="mt-8 space-y-4 text-center">
+                <button 
+                  type="submit" 
+                  disabled={loading}
+                  className="w-full bg-natural-accent text-white font-black py-4 rounded-2xl shadow-accent-glow hover:scale-[1.01] active:scale-95 transition-all text-xs uppercase tracking-widest flex items-center justify-center gap-2"
+                >
+                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (
+                    <>
+                      <Send className="w-4 h-4" /> Enviar Código Oficial (mozbiscates@gmail.com)
+                    </>
+                  )}
+                </button>
+              </form>
+            )}
+
+            {/* ETAPA 2: EXIBIÇÃO DO E-MAIL (CARD FIEL AO SCREENSHOT) + VALIDAÇÃO DO CÓDIGO */}
+            {recoveryStep === 'code' && recoveryData && (
+              <div className="space-y-6">
+                
+                {/* CARTÃO GMAIL EM MODO ESCURO FIEL AO SCREENSHOT DO UTILIZADOR */}
+                <div className="bg-[#0c0f12] text-white rounded-3xl p-5 sm:p-7 border border-white/10 shadow-2xl relative overflow-hidden font-sans">
+                  
+                  {/* Barra Superior estilo Gmail */}
+                  <div className="flex items-center justify-between border-b border-white/10 pb-4 mb-5 text-slate-400 text-xs">
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-full bg-natural-accent flex items-center justify-center text-white text-[10px] font-black">
+                        M
+                      </div>
+                      <span className="font-bold text-slate-200">Equipa Mozbiscates</span>
+                      <span className="text-[10px] text-emerald-400 font-mono">&lt;mozbiscates@gmail.com&gt;</span>
+                    </div>
+                    <span className="bg-emerald-950/80 text-emerald-400 text-[9px] font-black uppercase px-2 py-0.5 rounded-full border border-emerald-700/50">
+                      Oficial
+                    </span>
+                  </div>
+
+                  {/* Saudação e introdução fiel ao Screenshot */}
+                  <h2 className="text-2xl font-black text-white tracking-tight mb-2">
+                    Olá, {getUserDisplayName()}!
+                  </h2>
+                  <p className="text-slate-300 text-sm leading-relaxed mb-5">
+                    Um código de autenticação foi solicitado para aceder à sua conta <strong className="text-white">Mozbiscates</strong>:
+                  </p>
+
+                  {/* Caixa de detalhes da conta fiel ao Screenshot */}
+                  <div className="bg-[#161b22] rounded-2xl p-4 mb-5 text-xs text-slate-300 font-sans space-y-1.5 border border-white/5">
+                    <div><strong className="text-white">Conta:</strong> {recoveryData.email}</div>
+                    <div><strong className="text-white">Solicitado em:</strong> {recoveryData.requestedAt}</div>
+                    <div><strong className="text-white">IP:</strong> {recoveryData.ip}</div>
+                  </div>
+
+                  {/* Bloco Central do Código em Verde Neon (Exato ao Screenshot) */}
+                  <div className="bg-[#0e2a22] border-2 border-[#00d26a] rounded-2xl p-5 sm:p-6 text-center mb-5 shadow-[0_0_30px_rgba(0,210,106,0.18)]">
+                    <p className="text-xs sm:text-sm font-semibold text-slate-200 mb-2">
+                      Seu código de acesso:
+                    </p>
+                    <div className="text-3xl sm:text-4xl font-mono font-black tracking-[0.35em] text-[#00e676] select-all my-2">
+                      {recoveryData.code.split('').join(' ')}
+                    </div>
+                    <p className="text-xs font-semibold text-emerald-300 mt-2">
+                      Válido por 10 minutos
+                    </p>
+                  </div>
+
+                  {/* Bloco de Segurança Amarelo/Dourado Fiel ao Screenshot */}
+                  <div className="bg-[#1f1b0c] border border-amber-600/70 rounded-2xl p-4 sm:p-5 text-left text-xs mb-4">
+                    <div className="text-amber-400 font-extrabold flex items-center gap-1.5 mb-2.5 text-[13px]">
+                      <span>⚠️</span> Segurança:
+                    </div>
+                    <ul className="space-y-1.5 text-amber-100/90 text-[12px] leading-relaxed pl-1">
+                      <li className="flex items-start gap-1.5">
+                        <span className="text-amber-400 font-black">•</span>
+                        <span>Este código é válido por apenas <strong>10 minutos</strong></span>
+                      </li>
+                      <li className="flex items-start gap-1.5">
+                        <span className="text-amber-400 font-black">•</span>
+                        <span>Use-o imediatamente na tela de autenticação</span>
+                      </li>
+                      <li className="flex items-start gap-1.5">
+                        <span className="text-amber-400 font-black">•</span>
+                        <span>Máximo de <strong>3 tentativas</strong> por código (Restam {recoveryAttemptsLeft})</span>
+                      </li>
+                      <li className="flex items-start gap-1.5">
+                        <span className="text-amber-400 font-black">•</span>
+                        <span>Se não foi você, entre em contato imediatamente com mozbiscates@gmail.com</span>
+                      </li>
+                    </ul>
+                  </div>
+
+                  {/* Ação rápida para preencher o código com 1 clique */}
+                  <div className="flex items-center justify-between pt-2 border-t border-white/10 text-xs">
+                    <span className="text-slate-400 text-[11px]">Enviado pela equipa oficial</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRecoveryCode(recoveryData.code);
+                        setCodeCopied(true);
+                        setTimeout(() => setCodeCopied(false), 2000);
+                      }}
+                      className="inline-flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-400 text-black px-3.5 py-1.5 rounded-xl font-black text-[11px] transition-all active:scale-95 shadow-sm"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      {codeCopied ? 'Código Preenchido!' : 'Inserir Código Abaixo'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* FORMULÁRIO DE CONFIRMAÇÃO DO CÓDIGO */}
+                <form onSubmit={handleVerifyRecoveryCode} className="bg-white p-6 rounded-3xl border-2 border-natural-line/80 shadow-premium space-y-4">
+                  <div className="flex items-center justify-between text-xs font-bold text-natural-muted pb-1">
+                    <span className="flex items-center gap-1 text-natural-heading">
+                      <Clock className="w-4 h-4 text-natural-accent animate-pulse" />
+                      Expira em: <span className="font-mono text-natural-accent font-black text-sm">{formatTimer(secondsRemaining)}</span>
+                    </span>
+                    <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase ${
+                      recoveryAttemptsLeft <= 1 ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-700'
+                    }`}>
+                      Tentativas: {recoveryAttemptsLeft}/3
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-black uppercase tracking-wider text-natural-heading mb-2">
+                      Código de Autenticação (6 Dígitos)
+                    </label>
+                    <div className="relative">
+                      <KeyRound className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-natural-accent" />
+                      <input 
+                        type="text" 
+                        maxLength={6}
+                        required
+                        placeholder="Ex: 780640"
+                        className="w-full pl-12 pr-6 py-4 bg-natural-bg/50 border-2 border-natural-line rounded-2xl outline-none focus:border-natural-accent transition-all font-mono font-black text-center text-2xl tracking-[0.3em] text-natural-heading"
+                        value={recoveryCode}
+                        onChange={e => setRecoveryCode(e.target.value.replace(/\D/g, ''))}
+                      />
+                    </div>
+                  </div>
+
+                  <button 
+                    type="submit" 
+                    disabled={loading || secondsRemaining <= 0}
+                    className="w-full bg-natural-accent text-white font-black py-4 rounded-2xl shadow-accent-glow hover:scale-[1.01] active:scale-95 transition-all text-xs uppercase tracking-widest flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Verificar Código de Acesso'}
+                  </button>
+
+                  <div className="flex items-center justify-between pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setRecoveryStep('email')}
+                      className="text-[11px] font-bold text-natural-muted hover:text-natural-heading"
+                    >
+                      Alterar E-mail
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSendRecoveryCode()}
+                      disabled={loading}
+                      className="text-[11px] font-black text-natural-accent hover:underline flex items-center gap-1"
+                    >
+                      <RefreshCw className="w-3 h-3" /> Reenviar novo código
+                    </button>
+                  </div>
+                </form>
+
+              </div>
+            )}
+
+            {/* ETAPA 3: DEFINIR NOVA PALAVRA-PASSE */}
+            {recoveryStep === 'password' && (
+              <form onSubmit={handleResetPassword} className="bg-white p-6 rounded-3xl border-2 border-natural-line/80 shadow-premium space-y-4">
+                <div className="text-center pb-2">
+                  <div className="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto mb-2">
+                    <CheckCircle2 className="w-6 h-6" />
+                  </div>
+                  <h3 className="font-black text-natural-heading text-lg">Nova Palavra-passe</h3>
+                  <p className="text-xs text-natural-muted font-bold">Defina a nova chave de acesso para a conta {email}</p>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-natural-accent" />
+                    <input 
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      placeholder="Nova Palavra-passe (mín. 6 caracteres)"
+                      className="w-full pl-12 pr-12 py-4 bg-natural-bg/50 border-2 border-natural-line rounded-2xl outline-none focus:border-natural-accent transition-all font-bold text-sm"
+                      value={newPassword}
+                      onChange={e => setNewPassword(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-natural-muted hover:text-natural-heading"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+
+                  <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-natural-accent" />
+                    <input 
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      placeholder="Confirmar Nova Palavra-passe"
+                      className="w-full pl-12 pr-6 py-4 bg-natural-bg/50 border-2 border-natural-line rounded-2xl outline-none focus:border-natural-accent transition-all font-bold text-sm"
+                      value={confirmPassword}
+                      onChange={e => setConfirmPassword(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <button 
+                  type="submit" 
+                  disabled={loading}
+                  className="w-full bg-natural-accent text-white font-black py-4 rounded-2xl shadow-accent-glow hover:scale-[1.01] active:scale-95 transition-all text-xs uppercase tracking-widest flex items-center justify-center gap-2"
+                >
+                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Atualizar Palavra-passe'}
+                </button>
+              </form>
+            )}
+
+            {/* ETAPA 4: SUCESSO COMPLETO */}
+            {recoveryStep === 'success' && (
+              <div className="bg-white p-8 rounded-3xl border-2 border-emerald-200 text-center space-y-5 shadow-premium">
+                <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-3xl flex items-center justify-center mx-auto shadow-inner">
+                  <CheckCircle2 className="w-8 h-8" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-black text-natural-heading mb-1">Palavra-passe Atualizada!</h3>
+                  <p className="text-xs text-natural-muted font-bold leading-relaxed">
+                    A sua conta foi protegida e a nova palavra-passe foi guardada com sucesso pela equipa mozbiscates@gmail.com.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('login');
+                    setRecoveryStep('email');
+                    setPassword('');
+                  }}
+                  className="w-full bg-natural-accent text-white font-black py-4 rounded-2xl shadow-accent-glow hover:scale-[1.01] active:scale-95 transition-all text-xs uppercase tracking-widest"
+                >
+                  Fazer Login Agora
+                </button>
+              </div>
+            )}
+
+          </div>
+        )}
+
+        {/* BOTTOM SWITCH BUTTONS */}
+        <div className="mt-8 space-y-3 text-center">
           {mode === 'login' ? (
             <>
               <button 
-                onClick={() => setMode('forgot')}
-                className="text-[10px] font-black text-natural-accent uppercase tracking-widest block mx-auto underline"
+                type="button"
+                onClick={() => {
+                  setMode('forgot');
+                  setRecoveryStep('email');
+                  setError('');
+                  setMessage('');
+                }}
+                className="text-[11px] font-black text-natural-accent uppercase tracking-widest block mx-auto underline hover:opacity-80 transition-opacity"
               >
-                {t.forgotPassword}
+                {t.forgotPassword || 'Esqueceu a palavra-passe?'}
               </button>
               <button 
-                onClick={() => setMode('register')}
-                className="text-[10px] font-black text-natural-muted uppercase tracking-widest block mx-auto py-2"
+                type="button"
+                onClick={() => {
+                  setMode('register');
+                  setError('');
+                  setMessage('');
+                }}
+                className="text-[11px] font-black text-natural-muted uppercase tracking-widest block mx-auto py-2 hover:text-natural-heading transition-colors"
               >
-                {t.dontHaveAccount}
+                {t.dontHaveAccount || 'Não tem conta? Registar'}
               </button>
             </>
           ) : (
             <button 
-              onClick={() => setMode('login')}
-              className="text-[10px] font-black text-natural-accent uppercase tracking-widest block mx-auto py-2 underline"
+              type="button"
+              onClick={() => {
+                setMode('login');
+                setRecoveryStep('email');
+                setError('');
+                setMessage('');
+              }}
+              className="text-[11px] font-black text-natural-accent uppercase tracking-widest block mx-auto py-2 underline hover:opacity-80 transition-opacity"
             >
-              {t.alreadyHaveAccount}
+              {t.alreadyHaveAccount || 'Já tem conta? Fazer Login'}
             </button>
           )}
         </div>
+
       </div>
     </div>
   );
@@ -4612,9 +5108,13 @@ const WorkerProfileForm = ({ onSave, t }: { onSave: (data: { name: string, categ
     setError(null);
 
     try {
+      const token = await auth.currentUser?.getIdToken();
       const res = await fetch('/api/verify-identity', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token || ''}`
+        },
         body: JSON.stringify({ biPhoto, biSelfie })
       });
       
@@ -4921,10 +5421,15 @@ const ProviderCard = memo(({ provider, onSelect, userPos }: { provider: Provider
           onClick={(e) => {
             e.stopPropagation();
             const shareUrl = `${window.location.origin}${window.location.pathname}?workerId=${provider.id}`;
-            shortenUrl(shareUrl).then(short => {
-              navigator.clipboard.writeText(short);
-              alert("Link do perfil encurtado e copiado!");
-            });
+            if (navigator.clipboard) {
+              navigator.clipboard.writeText(shareUrl).then(() => {
+                alert("Link do perfil copiado para a área de transferência!");
+              }).catch(() => {
+                alert(`Link do perfil: ${shareUrl}`);
+              });
+            } else {
+              alert(`Link do perfil: ${shareUrl}`);
+            }
           }}
           className="p-2 bg-natural-surface rounded-full hover:bg-natural-accent hover:text-white transition-colors"
         >
@@ -5112,6 +5617,8 @@ export default function App() {
 function MainApp() {
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
   const [userData, setUserData] = useState<any>(null);
+  const [securityData, setSecurityData] = useState<any>(null);
+  const combinedUserData = useMemo(() => ({ ...(userData || {}), ...(securityData || {}) }), [userData, securityData]);
   const [authLoading, setAuthLoading] = useState(true);
   const [view, setView] = useState<'landing' | 'auth' | 'roles' | 'app'>('landing');
   const [role, setRole] = useState<'client' | 'worker' | 'admin' | null>(null);
@@ -5674,17 +6181,59 @@ function MainApp() {
       setCurrentUser(user);
       if (user) {
         try {
-          const userDoc = await getDoc(doc(db, 'users', user.uid));
-          const isAdmin = user.email === 'fushawshaw@gmail.com' || user.email === 'wanderj419@gmail.com' || user.email === 'mozbiscates@gmail.com';
+          const userDocRef = doc(db, 'users', user.uid);
+          const secDocRef = doc(db, 'users', user.uid, 'private_profile', 'security');
+
+          const [userDoc, secDoc] = await Promise.all([
+            getDoc(userDocRef),
+            getDoc(secDocRef).catch(() => null)
+          ]);
+
+          const isAdmin = (
+            user.email === 'fushawshaw@gmail.com' || 
+            user.email === 'wanderj419@gmail.com' || 
+            user.email === 'mozbiscates@gmail.com'
+          );
           
+          let secData = secDoc && secDoc.exists() ? secDoc.data() : null;
+
           if (userDoc.exists()) {
             const data = userDoc.data();
+
+            // Background seamless migration: if old user has PII in root doc, isolate it in private_profile
+            if (!secData && (data.biPhoto || data.biSelfie || data.nuit || data.emergencyContactPhone)) {
+              try {
+                secData = {
+                  userId: user.uid,
+                  biPhoto: data.biPhoto || '',
+                  biSelfie: data.biSelfie || '',
+                  nuit: data.nuit || '',
+                  emergencyContactName: data.emergencyContactName || '',
+                  emergencyContactPhone: data.emergencyContactPhone || '',
+                  updatedAt: serverTimestamp()
+                };
+                await setDoc(secDocRef, secData, { merge: true });
+                // Clean up sensitive fields from the public root profile
+                await updateDoc(userDocRef, {
+                  biPhoto: deleteField(),
+                  biSelfie: deleteField(),
+                  nuit: deleteField(),
+                  emergencyContactName: deleteField(),
+                  emergencyContactPhone: deleteField()
+                }).catch(() => {});
+              } catch (migErr) {
+                console.warn("PII migration notice:", migErr);
+              }
+            }
+
+            setSecurityData(secData);
             setUserData(data);
+
             if (isAdmin) {
               setRole('admin');
               setView('app');
               if (data.role !== 'admin') {
-                await updateDoc(doc(db, 'users', user.uid), { role: 'admin' }).catch(() => {});
+                await updateDoc(userDocRef, { role: 'admin' }).catch(() => {});
               }
             } else if (data.role) {
               setRole(data.role);
@@ -5703,11 +6252,13 @@ function MainApp() {
             }
           }
         } catch (err) {
+          console.warn("Auth initialization error:", err);
           setRole(null);
           setView('roles');
         }
       } else {
         setUserData(null);
+        setSecurityData(null);
         setRole(null);
         setView('landing');
       }
@@ -5766,8 +6317,31 @@ function MainApp() {
   };
 
   const fetchReviews = async (pid: string) => {
-    const res = await fetch(`/api/providers/${pid}/reviews`);
-    if (res.ok) setProviderReviews(await res.json());
+    try {
+      const q = query(
+        collection(db, 'users', pid, 'reviews'),
+        orderBy('createdAt', 'desc'),
+        limit(20)
+      );
+      const snap = await getDocs(q);
+      const list = snap.docs.map(d => {
+        const data = d.data();
+        let dateStr = new Date().toISOString();
+        if (data.createdAt && typeof data.createdAt.toDate === 'function') {
+          dateStr = data.createdAt.toDate().toISOString();
+        }
+        return {
+          id: d.id,
+          rating: Number(data.rating) || 5,
+          comment: String(data.comment || ''),
+          date: dateStr
+        };
+      });
+      setProviderReviews(list);
+    } catch (err) {
+      console.warn("Could not fetch reviews from firestore:", err);
+      setProviderReviews([]);
+    }
   };
 
   const handleSelectProvider = (p: Provider) => {
@@ -6142,6 +6716,21 @@ function MainApp() {
   const handleCreateProfile = async (providerData: any) => {
     if (!currentUser) return;
     try {
+      // 1. Save sensitive verification details to isolated subcollection
+      const secData = {
+        userId: currentUser.uid,
+        biPhoto: providerData.biPhoto || '',
+        biSelfie: providerData.biSelfie || '',
+        nuit: providerData.nuit || '',
+        emergencyContactName: providerData.emergencyContactName || '',
+        emergencyContactPhone: providerData.emergencyContactPhone || '',
+        verified: true,
+        updatedAt: serverTimestamp()
+      };
+      await setDoc(doc(db, 'users', currentUser.uid, 'private_profile', 'security'), secData, { merge: true });
+      setSecurityData(secData);
+
+      // 2. Save public profile to users collection (without exposing government IDs)
       await setDoc(doc(db, 'users', currentUser.uid), {
         uid: currentUser.uid,
         fullName: providerData.name,
@@ -6150,11 +6739,6 @@ function MainApp() {
         specialty: providerData.specialty || providerData.category,
         specialties: [providerData.category],
         photo: providerData.photo,
-        biPhoto: providerData.biPhoto,
-        biSelfie: providerData.biSelfie,
-        nuit: providerData.nuit || null,
-        emergencyContactName: providerData.emergencyContactName || '',
-        emergencyContactPhone: providerData.emergencyContactPhone || '',
         verified: true,
         portfolio: providerData.portfolio || [],
         email: currentUser.email,
@@ -6172,6 +6756,19 @@ function MainApp() {
   const handleCreateClientProfile = async (clientData: any) => {
     if (!currentUser) return;
     try {
+      // 1. Save sensitive verification & emergency details to isolated subcollection
+      const secData = {
+        userId: currentUser.uid,
+        biPhoto: clientData.biPhoto || '',
+        emergencyContactName: clientData.emergencyContactName || '',
+        emergencyContactPhone: clientData.emergencyContactPhone || '',
+        verified: true,
+        updatedAt: serverTimestamp()
+      };
+      await setDoc(doc(db, 'users', currentUser.uid, 'private_profile', 'security'), secData, { merge: true });
+      setSecurityData(secData);
+
+      // 2. Save public client profile
       await setDoc(doc(db, 'users', currentUser.uid), {
         uid: currentUser.uid,
         fullName: clientData.fullName,
@@ -6180,9 +6777,6 @@ function MainApp() {
         bairro: clientData.bairro,
         city: clientData.city,
         photo: clientData.photo,
-        biPhoto: clientData.biPhoto,
-        emergencyContactName: clientData.emergencyContactName,
-        emergencyContactPhone: clientData.emergencyContactPhone,
         verified: true,
         email: currentUser.email,
         updatedAt: serverTimestamp()
@@ -6232,43 +6826,46 @@ function MainApp() {
           console.error("Valor do trabalho inválido para liquidação de pagamento.");
           return;
         }
-        update.status = 'CONCLUIDO';
-        const fee = job.amount * 0.1;
-        const netAmount = Math.round(job.amount - fee);
-        update.payoutAmount = netAmount;
-        const workerRef = doc(db, 'users', job.providerId);
-        
-        // Update provider balance and job count in Firestore in real-time
-        await updateDoc(workerRef, { 
-          jobs: increment(1),
-          balance: increment(netAmount)
-        }).catch(err => console.error("Error updating worker profile:", err));
-        
-        // Post real-time payout message
-        await addDoc(collection(db, 'jobs', job.id, 'messages'), {
-          senderId: 'system',
-          text: `🎉 Serviço Confirmado pelo Cliente! O valor de ${netAmount} MT (deduzida taxa de comissão de 10%: ${Math.round(fee)} MT) foi creditado no seu saldo Mozbiscates com sucesso e está disponível na sua carteira.`,
-          createdAt: serverTimestamp()
-        }).catch(err => console.error("Error adding payout system message:", err));
 
-        // If the current active user is also the provider (testing/demo scenario)
-        if (job.providerId === currentUser?.uid) {
-          const title = t.payoutCreditedTitle || "Saldo Creditado! 💰🎉";
-          const body = `${t.payoutCreditedBody || "O cliente confirmou o serviço finalizado. O seu saldo foi creditado com sucesso!"} (+${netAmount} MT • ${job.category})`;
+        try {
+          // VULN-03: Delegar a liquidação e o crédito de saldo ao backend autenticado
+          const token = await currentUser?.getIdToken();
+          const res = await fetch('/api/jobs/complete', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token || ''}`
+            },
+            body: JSON.stringify({ jobId: job.id })
+          });
+
+          const payoutRes = await res.json();
+          if (!res.ok) {
+            throw new Error(payoutRes.error || "Falha na liquidação do pagamento.");
+          }
+
+          const title = t.payoutCreditedTitle || "Serviço Confirmado e Liquidado! 💰";
+          const body = `O valor líquido de ${payoutRes.netAmount} MT (após comissão oficial de 10%: ${payoutRes.fee} MT) foi creditado com sucesso ao prestador. ID: ${payoutRes.transactionId}`;
           sendLocalNotification(title, {
             body,
             tag: `payout-${job.id}`,
             data: { jobId: job.id }
           });
           setNotification({ title, body });
+          setTimeout(() => setNotification(null), 9000);
           try {
             const audio = new Audio(NOTIFICATION_SOUND);
             audio.volume = 0.5;
             audio.play().catch(() => {});
           } catch (e) {}
-          setBalance(prev => prev + netAmount);
+
+          // Retornar diretamente: o backend já executou a transacção atómica, actualizou o trabalho e creditou o saldo
+          return;
+        } catch (payoutErr: any) {
+          console.error("Payout error:", payoutErr);
+          alert(payoutErr.message || "Erro ao liquidar o trabalho no servidor.");
+          return;
         }
-        break;
       case 'VALIDATE_PAYMENT':
         update.status = 'PAGO';
         break;
@@ -6352,7 +6949,7 @@ function MainApp() {
   }
 
   // Cadastro Obrigatório de Segurança para Quem Precisa de Serviços (Cliente)
-  if (role === 'client' && (!userData?.phone || !userData?.biPhoto)) {
+  if (role === 'client' && (!combinedUserData?.phone || !combinedUserData?.biPhoto)) {
     return (
       <div className="min-h-screen bg-natural-bg p-4 flex flex-col items-center justify-center">
         <header className="w-full max-w-lg py-4 flex justify-between items-center mb-4">
@@ -6360,7 +6957,7 @@ function MainApp() {
           <button onClick={handleLogout} className="text-natural-muted font-black text-[10px] uppercase">{t.logout || 'Sair'}</button>
         </header>
         <ClientSecurityProfileModal
-          initialData={userData}
+          initialData={combinedUserData}
           onSave={handleCreateClientProfile}
           isMandatory={true}
         />
@@ -6380,14 +6977,14 @@ function MainApp() {
           setActiveEmergencyJob(null);
         }}
         currentUser={currentUser}
-        userData={userData}
+        userData={combinedUserData}
         activeJob={activeEmergencyJob}
       />
 
       {/* Modal de Cadastro de Segurança do Cliente (Edição) */}
       {showClientProfileModal && (
         <ClientSecurityProfileModal
-          initialData={userData}
+          initialData={combinedUserData}
           onSave={handleCreateClientProfile}
           onCancel={() => setShowClientProfileModal(false)}
           isMandatory={false}
@@ -6911,7 +7508,7 @@ function MainApp() {
                   {role === 'worker' && <WorkerWallet t={t} balance={balance} userData={userData} db={db} currentUser={currentUser} />}
                   {role === 'worker' && <WorkerEarningsChart jobs={jobs} userData={userData} balance={balance} t={t} />}
                   {role === 'worker' && <CommunityRules t={t} />}
-                  {role === 'admin' && <WithdrawalManagement jobs={jobs} onAction={handleJobAction} t={t} />}
+                  {role === 'admin' && <WithdrawalManagement jobs={jobs} providers={rawProviders} onAction={handleJobAction} t={t} />}
 
                  {role === 'admin' && adminView === 'history' ? (
                    <div className="space-y-6">
@@ -7137,10 +7734,15 @@ function MainApp() {
                       <button 
                         onClick={() => {
                           const shareUrl = `${window.location.origin}${window.location.pathname}?workerId=${selectedProvider.id}`;
-                          shortenUrl(shareUrl).then(short => {
-                            navigator.clipboard.writeText(short);
-                            alert("Link do perfil encurtado e copiado!");
-                          });
+                          if (navigator.clipboard) {
+                            navigator.clipboard.writeText(shareUrl).then(() => {
+                              alert("Link do perfil copiado com sucesso!");
+                            }).catch(() => {
+                              alert(`Link do perfil: ${shareUrl}`);
+                            });
+                          } else {
+                            alert(`Link do perfil: ${shareUrl}`);
+                          }
                         }}
                         className="p-2.5 bg-natural-surface rounded-2xl border border-natural-line hover:bg-natural-accent hover:text-white transition-all active:scale-90"
                       >
@@ -7159,8 +7761,8 @@ function MainApp() {
                         <ShieldCheck className="w-3 h-3 text-emerald-600" /> BI Verificado
                       </span>
                       {(selectedProvider as any).nuit && (
-                        <span className="inline-flex items-center gap-1 text-[9px] font-black text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-lg">
-                          <FileText className="w-3 h-3 text-slate-500" /> NUIT: {(selectedProvider as any).nuit}
+                        <span className="inline-flex items-center gap-1 text-[9px] font-black text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-lg" title="Contribuinte regularizado em Moçambique">
+                          <FileText className="w-3 h-3 text-slate-500" /> NUIT Registado
                         </span>
                       )}
                       <span className="inline-flex items-center gap-1 text-[9px] font-black text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-lg">
