@@ -71,7 +71,11 @@ import {
   Eye,
   EyeOff,
   KeyRound,
-  Send
+  Send,
+  Users,
+  UserCheck,
+  UserX,
+  MessageSquareHeart
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { motion, AnimatePresence } from 'motion/react';
@@ -3571,8 +3575,511 @@ const generateMonthlyPdfReport = (data: MonthlyReportPdfData) => {
   doc.save(`resumo-mensal-mozbiscates-${data.monthKey}.pdf`);
 };
 
-const AdminMetrics = memo(({ jobs, t }: { jobs: Job[], t: any }) => {
+// --- FORMULÁRIO OFICIAL DE INACTIVIDADE & RETENÇÃO: "Queremos melhorar! 💙" ---
+const InactivityFeedbackModal = memo(({
+  isOpen,
+  onClose,
+  currentUser,
+  userData,
+  role,
+  onSuccess
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  currentUser: any;
+  userData: any;
+  role: string | null;
+  onSuccess?: () => void;
+}) => {
+  const [usageType, setUsageType] = useState<string>('Procurava serviços.');
+  const [reason, setReason] = useState<string>('Não encontrei clientes ou serviços suficientes.');
+  const [improvements, setImprovements] = useState<string>('A facilidade de utilização.');
+  const [returnLikelihood, setReturnLikelihood] = useState<string>('Talvez, se houver melhorias.');
+  const [suggestion, setSuggestion] = useState<string>('');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+
+  if (!isOpen) return null;
+
+  const usageOptions = [
+    'Procurava serviços.',
+    'Oferecia serviços como biscateiro.',
+    'Ambas as opções.'
+  ];
+
+  const reasonOptions = [
+    'Não encontrei clientes ou serviços suficientes.',
+    'Tive dificuldades em utilizar a aplicação.',
+    'Encontrei problemas técnicos.',
+    'Tive preocupações com a segurança ou confiança.',
+    'Deixei de precisar do serviço.',
+    'Outro motivo.'
+  ];
+
+  const improvementOptions = [
+    'A facilidade de utilização.',
+    'A quantidade de clientes e serviços.',
+    'A segurança e confiança.',
+    'O funcionamento da aplicação.',
+    'O atendimento e apoio ao utilizador.'
+  ];
+
+  const returnOptions = [
+    'Sim.',
+    'Talvez, se houver melhorias.',
+    'Não.'
+  ];
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) {
+      alert("Por favor, inicie sessão para submeter o seu feedback.");
+      return;
+    }
+    setSubmitting(true);
+    setErrorMsg('');
+
+    try {
+      const feedbackId = `FB_${currentUser.uid.slice(0, 10)}_${Date.now()}`;
+      const payload = {
+        userId: currentUser.uid,
+        userEmail: currentUser.email || '',
+        userName: userData?.fullName || currentUser.displayName || 'Utilizador Mozbiscates',
+        userRole: role || userData?.role || 'client',
+        usageType,
+        reason,
+        improvements,
+        returnLikelihood,
+        suggestion: (suggestion || '').trim().slice(0, 1000),
+        createdAt: serverTimestamp()
+      };
+
+      await setDoc(doc(db, 'inactivity_feedback', feedbackId), payload);
+
+      // Re-activate user timestamp
+      await updateDoc(doc(db, 'users', currentUser.uid), {
+        lastActiveAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      }).catch(() => {});
+
+      // Record in localStorage
+      try {
+        localStorage.setItem(`mozbiscates_feedback_submitted_${currentUser.uid}`, 'true');
+      } catch (e) {}
+
+      setSubmitted(true);
+      if (onSuccess) onSuccess();
+    } catch (err: any) {
+      console.error("Erro ao enviar formulário de inactividade:", err);
+      setErrorMsg("Ocorreu um erro ao enviar o seu feedback. Por favor tente novamente.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-300">
+      <div className="bg-white w-full max-w-xl max-h-[92vh] overflow-y-auto rounded-[2.5rem] border-2 border-natural-line shadow-2xl p-6 sm:p-8 space-y-6 relative">
+        <button
+          onClick={onClose}
+          className="absolute top-5 right-5 p-2 rounded-full bg-natural-surface hover:bg-natural-line/40 text-natural-muted transition-colors"
+          aria-label="Fechar"
+        >
+          <X className="w-5 h-5" />
+        </button>
+
+        {submitted ? (
+          <div className="py-8 text-center space-y-5 animate-in zoom-in duration-300">
+            <div className="w-20 h-20 bg-emerald-50 rounded-full flex items-center justify-center mx-auto text-natural-accent border-2 border-natural-accent/20">
+              <Sparkles className="w-10 h-10 text-natural-accent" />
+            </div>
+            <div className="space-y-2">
+              <span className="text-[10px] font-black uppercase tracking-widest text-natural-accent bg-natural-accent/10 px-3 py-1 rounded-full">
+                MOZBISCATES
+              </span>
+              <h2 className="text-2xl font-black text-natural-heading tracking-tight">
+                Obrigado pela tua colaboração! 💙
+              </h2>
+              <p className="text-sm font-medium text-natural-muted max-w-md mx-auto">
+                A tua opinião é fundamental para melhorarmos a plataforma para todos os moçambicanos. A tua conta foi reativada com sucesso!
+              </p>
+            </div>
+            <div className="pt-4 border-t border-natural-surface">
+              <p className="text-xs font-black text-natural-muted uppercase tracking-wider mb-5">
+                Mozbiscates — Ligamos pessoas a oportunidades.
+              </p>
+              <button
+                onClick={onClose}
+                className="w-full sm:w-auto px-8 py-3.5 rounded-2xl bg-natural-accent text-white font-black text-sm uppercase tracking-wider hover:bg-natural-accent/90 transition-all shadow-md"
+              >
+                Continuar no Mozbiscates
+              </button>
+            </div>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-6 text-left">
+            {/* Header */}
+            <div className="space-y-2 border-b border-natural-surface pb-4">
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-0.5 rounded-full bg-natural-accent/10 text-natural-accent font-black text-[10px] uppercase tracking-widest">
+                  MOZBISCATES
+                </span>
+                <span className="text-xs font-black text-natural-accent flex items-center gap-1">
+                  💙 Queremos melhorar!
+                </span>
+              </div>
+              <h2 className="text-2xl font-black text-natural-heading tracking-tight">
+                Queremos melhorar! 💙
+              </h2>
+              <p className="text-xs text-natural-muted font-medium leading-relaxed">
+                Olá! Notámos que já não utilizas o Mozbiscates. Gostaríamos de saber o motivo para melhorarmos a tua experiência. Leva menos de 1 minuto!
+              </p>
+            </div>
+
+            {errorMsg && (
+              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl font-bold">
+                {errorMsg}
+              </div>
+            )}
+
+            {/* Pergunta 1 */}
+            <div className="space-y-2.5">
+              <label className="block text-xs font-black text-natural-heading">
+                1. Como utilizavas o Mozbiscates?
+              </label>
+              <div className="space-y-2">
+                {usageOptions.map((opt) => (
+                  <label
+                    key={opt}
+                    className={`flex items-center gap-3 p-3 rounded-2xl border-2 cursor-pointer transition-all ${
+                      usageType === opt
+                        ? 'border-natural-accent bg-emerald-50/40 font-bold text-natural-heading'
+                        : 'border-natural-line hover:border-natural-accent/40 bg-white text-natural-muted font-medium text-xs'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="usageType"
+                      value={opt}
+                      checked={usageType === opt}
+                      onChange={() => setUsageType(opt)}
+                      className="accent-natural-accent w-4 h-4"
+                    />
+                    <span className="text-xs">{opt}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Pergunta 2 */}
+            <div className="space-y-2.5">
+              <label className="block text-xs font-black text-natural-heading">
+                2. Porque deixaste de utilizar a aplicação?
+              </label>
+              <div className="space-y-2">
+                {reasonOptions.map((opt) => (
+                  <label
+                    key={opt}
+                    className={`flex items-center gap-3 p-3 rounded-2xl border-2 cursor-pointer transition-all ${
+                      reason === opt
+                        ? 'border-natural-accent bg-emerald-50/40 font-bold text-natural-heading'
+                        : 'border-natural-line hover:border-natural-accent/40 bg-white text-natural-muted font-medium text-xs'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="reason"
+                      value={opt}
+                      checked={reason === opt}
+                      onChange={() => setReason(opt)}
+                      className="accent-natural-accent w-4 h-4"
+                    />
+                    <span className="text-xs">{opt}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Pergunta 3 */}
+            <div className="space-y-2.5">
+              <label className="block text-xs font-black text-natural-heading">
+                3. O que devemos melhorar?
+              </label>
+              <div className="space-y-2">
+                {improvementOptions.map((opt) => (
+                  <label
+                    key={opt}
+                    className={`flex items-center gap-3 p-3 rounded-2xl border-2 cursor-pointer transition-all ${
+                      improvements === opt
+                        ? 'border-natural-accent bg-emerald-50/40 font-bold text-natural-heading'
+                        : 'border-natural-line hover:border-natural-accent/40 bg-white text-natural-muted font-medium text-xs'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="improvements"
+                      value={opt}
+                      checked={improvements === opt}
+                      onChange={() => setImprovements(opt)}
+                      className="accent-natural-accent w-4 h-4"
+                    />
+                    <span className="text-xs">{opt}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Pergunta 4 */}
+            <div className="space-y-2.5">
+              <label className="block text-xs font-black text-natural-heading">
+                4. Voltarias a utilizar o Mozbiscates?
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {returnOptions.map((opt) => (
+                  <label
+                    key={opt}
+                    className={`flex items-center justify-center p-3 rounded-2xl border-2 cursor-pointer text-center transition-all ${
+                      returnLikelihood === opt
+                        ? 'border-natural-accent bg-emerald-50/40 font-black text-natural-heading text-xs'
+                        : 'border-natural-line hover:border-natural-accent/40 bg-white text-natural-muted font-medium text-xs'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="returnLikelihood"
+                      value={opt}
+                      checked={returnLikelihood === opt}
+                      onChange={() => setReturnLikelihood(opt)}
+                      className="sr-only"
+                    />
+                    <span>{opt}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Pergunta 5 */}
+            <div className="space-y-2">
+              <div className="flex justify-between items-center">
+                <label className="block text-xs font-black text-natural-heading">
+                  5. Que sugestão gostarias de nos dar?
+                </label>
+                <span className="text-[10px] text-natural-muted font-bold">
+                  Resposta opcional
+                </span>
+              </div>
+              <textarea
+                value={suggestion}
+                onChange={(e) => setSuggestion(e.target.value.slice(0, 1000))}
+                rows={3}
+                placeholder="Partilhe aqui as suas ideias ou o que mais sentiu falta..."
+                className="w-full p-3.5 bg-natural-surface border-2 border-natural-line rounded-2xl text-xs font-medium text-natural-heading outline-none focus:border-natural-accent transition-colors resize-none"
+              />
+              <div className="text-right text-[10px] text-natural-muted">
+                {suggestion.length}/1000
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="pt-4 border-t border-natural-surface space-y-4">
+              <div className="text-center">
+                <p className="text-[11px] font-black text-natural-muted uppercase tracking-wider">
+                  Obrigado pela tua colaboração!
+                </p>
+                <p className="text-[10px] font-bold text-natural-accent mt-0.5">
+                  Mozbiscates — Ligamos pessoas a oportunidades.
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-3">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="w-full sm:w-1/3 py-3 rounded-2xl border-2 border-natural-line font-black text-xs uppercase tracking-wider text-natural-muted hover:bg-natural-surface transition-all"
+                >
+                  Agora não
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="w-full sm:w-2/3 py-3 rounded-2xl bg-natural-accent text-white font-black text-xs uppercase tracking-wider hover:bg-natural-accent/90 transition-all flex items-center justify-center gap-2 shadow-md disabled:opacity-50"
+                >
+                  {submitting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>A enviar...</span>
+                    </>
+                  ) : (
+                    <span>Submeter e Continuar 💙</span>
+                  )}
+                </button>
+              </div>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+});
+
+const AdminMetrics = memo(({ 
+  jobs, 
+  users = [], 
+  feedbacks = [], 
+  onPreviewInactivityModal, 
+  t 
+}: { 
+  jobs: Job[], 
+  users?: any[], 
+  feedbacks?: any[], 
+  onPreviewInactivityModal?: () => void, 
+  t: any 
+}) => {
   const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
+  const [retentionSubTab, setRetentionSubTab] = useState<'actives' | 'inactives' | 'all' | 'overview' | 'feedbacks'>('actives');
+  const [userSearchTerm, setUserSearchTerm] = useState('');
+  const [userRoleFilter, setUserRoleFilter] = useState<'all' | 'worker' | 'client'>('all');
+
+  const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+
+  const extractDate = (raw: any): Date | null => {
+    if (!raw) return null;
+    if (typeof raw.toDate === 'function') return raw.toDate();
+    if (raw instanceof Date) return raw;
+    if (raw.seconds) return new Date(raw.seconds * 1000);
+    const d = new Date(raw);
+    return isNaN(d.getTime()) ? null : d;
+  };
+
+  const userStats = useMemo(() => {
+    const now = Date.now();
+    const ninetyDaysAgo = now - NINETY_DAYS_MS;
+    const totalUsers = users.length;
+    let activeUsers = 0;
+    let inactiveUsers = 0;
+    let activeWorkers = 0;
+    let inactiveWorkers = 0;
+    let activeClients = 0;
+    let inactiveClients = 0;
+
+    const activeUsersList: any[] = [];
+    const inactiveUsersList: any[] = [];
+    const allUsersList: any[] = [];
+
+    users.forEach((u) => {
+      // 1. Direct user timestamps
+      let lastActiveDate = extractDate(u.lastActiveAt) || extractDate(u.updatedAt) || extractDate(u.createdAt);
+
+      // 2. Cross-reference activity in jobs
+      let latestJobDate: Date | null = null;
+      let hasActiveJob = false;
+      let userJobsCount = 0;
+
+      jobs.forEach(j => {
+        const isParticipant = j.clientId === u.id || j.providerId === u.id || j.clientId === u.uid || j.providerId === u.uid;
+        if (isParticipant) {
+          userJobsCount++;
+          if (['AGUARDANDO_DEPOSITO', 'VALIDACAO_PENDENTE', 'PAGO', 'EM_CURSO', 'FINALIZADO'].includes(j.status)) {
+            hasActiveJob = true;
+          }
+          const jDate = extractDate((j as any).completedAt) || extractDate((j as any).updatedAt) || extractDate((j as any).createdAt);
+          if (jDate && (!latestJobDate || jDate > latestJobDate)) {
+            latestJobDate = jDate;
+          }
+        }
+      });
+
+      if (latestJobDate && (!lastActiveDate || latestJobDate > lastActiveDate)) {
+        lastActiveDate = latestJobDate;
+      }
+
+      // 3. Fallback: If no date exists on document, treat as active newly registered account
+      const hasKnownDate = Boolean(lastActiveDate);
+      if (!lastActiveDate) {
+        lastActiveDate = new Date();
+      }
+
+      const diffMs = now - lastActiveDate.getTime();
+      const daysInactive = Math.max(0, Math.floor(diffMs / (24 * 60 * 60 * 1000)));
+
+      // An account is inactive ONLY if it has an explicit old date (>90 days) and has no active jobs
+      const isInactive = hasKnownDate && !hasActiveJob && (daysInactive > 90);
+      const isActive = !isInactive;
+
+      const userRecord = {
+        ...u,
+        lastActiveDate,
+        daysInactive,
+        isActive,
+        totalJobs: userJobsCount || u.jobs || 0
+      };
+
+      allUsersList.push(userRecord);
+
+      if (isInactive) {
+        inactiveUsers++;
+        if (u.role === 'worker') inactiveWorkers++;
+        else inactiveClients++;
+        inactiveUsersList.push(userRecord);
+      } else {
+        activeUsers++;
+        if (u.role === 'worker') activeWorkers++;
+        else activeClients++;
+        activeUsersList.push(userRecord);
+      }
+    });
+
+    // Sort active users: most recently active first
+    activeUsersList.sort((a, b) => a.daysInactive - b.daysInactive);
+    // Sort inactive users: most days inactive first
+    inactiveUsersList.sort((a, b) => b.daysInactive - a.daysInactive);
+    // Sort all users: active first, then by days
+    allUsersList.sort((a, b) => a.daysInactive - b.daysInactive);
+
+    const activePercent = totalUsers > 0 ? Math.round((activeUsers / totalUsers) * 100) : 100;
+    const inactivePercent = totalUsers > 0 ? Math.round((inactiveUsers / totalUsers) * 100) : 0;
+
+    return {
+      totalUsers,
+      activeUsers,
+      inactiveUsers,
+      activePercent,
+      inactivePercent,
+      totalWorkers: activeWorkers + inactiveWorkers,
+      totalClients: activeClients + inactiveClients,
+      activeWorkers,
+      inactiveWorkers,
+      activeClients,
+      inactiveClients,
+      activeUsersList,
+      inactiveUsersList,
+      allUsersList
+    };
+  }, [users, jobs]);
+
+  const feedbackStats = useMemo(() => {
+    const total = feedbacks.length;
+    const usageCounts: Record<string, number> = {};
+    const reasonCounts: Record<string, number> = {};
+    const improvementCounts: Record<string, number> = {};
+    const returnCounts: Record<string, number> = {};
+
+    feedbacks.forEach(f => {
+      if (f.usageType) usageCounts[f.usageType] = (usageCounts[f.usageType] || 0) + 1;
+      if (f.reason) reasonCounts[f.reason] = (reasonCounts[f.reason] || 0) + 1;
+      if (f.improvements) improvementCounts[f.improvements] = (improvementCounts[f.improvements] || 0) + 1;
+      if (f.returnLikelihood) returnCounts[f.returnLikelihood] = (returnCounts[f.returnLikelihood] || 0) + 1;
+    });
+
+    return {
+      total,
+      usageCounts,
+      reasonCounts,
+      improvementCounts,
+      returnCounts
+    };
+  }, [feedbacks]);
 
   const getJobDate = (job: any) => {
     const raw = job.completedAt || job.createdAt;
@@ -4133,6 +4640,600 @@ const AdminMetrics = memo(({ jobs, t }: { jobs: Job[], t: any }) => {
               </button>
             ))}
           </div>
+        </div>
+      </div>
+
+      {/* SEÇÃO 1: MÉTRICAS DE COMUNIDADE, ACTIVOS & INACTIVOS (90 DIAS / 3 MESES) */}
+      <div className="space-y-4">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+          <div>
+            <h3 className="font-black text-natural-heading text-lg tracking-tight flex items-center gap-2">
+              <Users className="w-5 h-5 text-natural-accent" /> Comunidade & Retenção de Utilizadores
+            </h3>
+            <p className="text-[10px] text-natural-muted font-bold uppercase tracking-widest mt-0.5">
+              Métricas de utilizadores activos e inactivos (prazo de 90 dias / 3 meses)
+            </p>
+          </div>
+          {onPreviewInactivityModal && (
+            <button
+              onClick={onPreviewInactivityModal}
+              className="px-4 py-2 rounded-2xl bg-emerald-50 border-2 border-natural-accent/30 text-natural-accent font-black text-xs uppercase tracking-wider hover:bg-natural-accent hover:text-white transition-all flex items-center gap-2 shadow-sm"
+            >
+              <MessageSquareHeart className="w-4 h-4" />
+              <span>Testar Formulário "Queremos melhorar! 💙"</span>
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {/* Card 1: Total Pessoas */}
+          <button
+            type="button"
+            onClick={() => setRetentionSubTab('all')}
+            className={`p-5 rounded-[2rem] border-2 shadow-premium flex flex-col justify-between relative overflow-hidden group text-left transition-all cursor-pointer ${
+              retentionSubTab === 'all'
+                ? 'bg-natural-surface/60 border-natural-heading ring-2 ring-natural-heading/20'
+                : 'bg-white border-natural-line hover:border-natural-heading/40'
+            }`}
+          >
+            <div className="absolute -right-3 -top-3 w-12 h-12 bg-natural-accent/10 rounded-full flex items-center justify-center text-natural-accent group-hover:scale-110 transition-transform">
+              <Users className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-[8px] font-black text-natural-muted uppercase tracking-widest leading-none mb-1">Total de Pessoas</p>
+              <h4 className="font-black text-2xl text-natural-heading tracking-tighter">
+                {userStats.totalUsers}
+              </h4>
+            </div>
+            <p className="text-[8px] text-natural-muted font-bold uppercase mt-3">
+              {userStats.totalClients} Clientes • {userStats.totalWorkers} Biscateiros
+            </p>
+          </button>
+
+          {/* Card 2: Activos (90 dias) */}
+          <button
+            type="button"
+            onClick={() => setRetentionSubTab('actives')}
+            className={`p-5 rounded-[2rem] border-2 shadow-premium flex flex-col justify-between relative overflow-hidden group text-left transition-all cursor-pointer ${
+              retentionSubTab === 'actives'
+                ? 'bg-emerald-50/70 border-emerald-600 ring-2 ring-emerald-500/30'
+                : 'bg-white border-natural-line hover:border-emerald-500/50'
+            }`}
+          >
+            <div className="absolute -right-3 -top-3 w-12 h-12 bg-emerald-500/10 rounded-full flex items-center justify-center text-emerald-600 group-hover:scale-110 transition-transform">
+              <UserCheck className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-[8px] font-black text-emerald-700 uppercase tracking-widest leading-none mb-1">Activos (&le; 90 dias)</p>
+              <h4 className="font-black text-2xl text-emerald-700 tracking-tighter">
+                {userStats.activeUsers} <span className="text-xs font-bold text-natural-muted">({userStats.activePercent}%)</span>
+              </h4>
+            </div>
+            <p className="text-[8px] text-emerald-700 font-bold uppercase mt-3">
+              Com actividade nos últimos 3 meses
+            </p>
+          </button>
+
+          {/* Card 3: Inactivos (+90 dias) */}
+          <button
+            type="button"
+            onClick={() => setRetentionSubTab('inactives')}
+            className={`p-5 rounded-[2rem] border-2 shadow-premium flex flex-col justify-between relative overflow-hidden group text-left transition-all cursor-pointer ${
+              retentionSubTab === 'inactives'
+                ? 'bg-amber-50/70 border-amber-600 ring-2 ring-amber-500/30'
+                : 'bg-white border-natural-line hover:border-amber-500/50'
+            }`}
+          >
+            <div className="absolute -right-3 -top-3 w-12 h-12 bg-amber-500/10 rounded-full flex items-center justify-center text-amber-600 group-hover:scale-110 transition-transform">
+              <UserX className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-[8px] font-black text-amber-700 uppercase tracking-widest leading-none mb-1">Inactivos (&gt; 90 dias)</p>
+              <h4 className="font-black text-2xl text-amber-700 tracking-tighter">
+                {userStats.inactiveUsers} <span className="text-xs font-bold text-natural-muted">({userStats.inactivePercent}%)</span>
+              </h4>
+            </div>
+            <p className="text-[8px] text-amber-700 font-bold uppercase mt-3">
+              Sem actividade há mais de 3 meses
+            </p>
+          </button>
+
+          {/* Card 4: Feedbacks Recebidos */}
+          <button
+            type="button"
+            onClick={() => setRetentionSubTab('feedbacks')}
+            className={`p-5 rounded-[2rem] border-2 shadow-premium flex flex-col justify-between relative overflow-hidden group text-left transition-all cursor-pointer ${
+              retentionSubTab === 'feedbacks'
+                ? 'bg-blue-50/70 border-blue-600 ring-2 ring-blue-500/30'
+                : 'bg-white border-natural-line hover:border-blue-500/50'
+            }`}
+          >
+            <div className="absolute -right-3 -top-3 w-12 h-12 bg-blue-500/10 rounded-full flex items-center justify-center text-blue-600 group-hover:scale-110 transition-transform">
+              <MessageSquareHeart className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-[8px] font-black text-blue-700 uppercase tracking-widest leading-none mb-1">Pesquisas Recebidas</p>
+              <h4 className="font-black text-2xl text-blue-700 tracking-tighter">
+                {feedbackStats.total}
+              </h4>
+            </div>
+            <p className="text-[8px] text-blue-700 font-bold uppercase mt-3">
+              Respostas "Queremos melhorar! 💙"
+            </p>
+          </button>
+        </div>
+
+        {/* Painel Interativo de Retenção & Inactividade */}
+        <div className="bg-white p-6 rounded-[2.5rem] border-2 border-natural-line shadow-premium space-y-5">
+          <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3 border-b border-natural-surface pb-4">
+            <div>
+              <h4 className="font-black text-natural-heading text-base flex items-center gap-2">
+                <MessageSquareHeart className="w-5 h-5 text-natural-accent" /> Gestão de Comunidade, Activos & Retenção
+              </h4>
+              <p className="text-[10px] text-natural-muted font-bold mt-0.5">
+                Controlo em tempo real de utilizadores activos (&le;90 dias) e inactivos (&gt;90 dias / 3 meses)
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5 bg-natural-surface p-1 rounded-2xl">
+              <button
+                type="button"
+                onClick={() => setRetentionSubTab('actives')}
+                className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-1.5 ${
+                  retentionSubTab === 'actives' 
+                    ? 'bg-emerald-600 text-white shadow-sm' 
+                    : 'text-natural-muted hover:text-emerald-700'
+                }`}
+              >
+                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                Activos ({userStats.activeUsers})
+              </button>
+              <button
+                type="button"
+                onClick={() => setRetentionSubTab('inactives')}
+                className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all flex items-center gap-1.5 ${
+                  retentionSubTab === 'inactives' 
+                    ? 'bg-amber-600 text-white shadow-sm' 
+                    : 'text-natural-muted hover:text-amber-700'
+                }`}
+              >
+                <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                Inactivos ({userStats.inactiveUsers})
+              </button>
+              <button
+                type="button"
+                onClick={() => setRetentionSubTab('all')}
+                className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all ${
+                  retentionSubTab === 'all' 
+                    ? 'bg-natural-heading text-white shadow-sm' 
+                    : 'text-natural-muted hover:text-natural-heading'
+                }`}
+              >
+                Todos ({userStats.totalUsers})
+              </button>
+              <button
+                type="button"
+                onClick={() => setRetentionSubTab('overview')}
+                className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all ${
+                  retentionSubTab === 'overview' 
+                    ? 'bg-natural-heading text-white shadow-sm' 
+                    : 'text-natural-muted hover:text-natural-heading'
+                }`}
+              >
+                Motivos & Análise
+              </button>
+              <button
+                type="button"
+                onClick={() => setRetentionSubTab('feedbacks')}
+                className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all ${
+                  retentionSubTab === 'feedbacks' 
+                    ? 'bg-blue-600 text-white shadow-sm' 
+                    : 'text-natural-muted hover:text-blue-700'
+                }`}
+              >
+                Respostas ({feedbackStats.total})
+              </button>
+            </div>
+          </div>
+
+          {retentionSubTab === 'overview' && (
+            <div className="space-y-6 text-left">
+              {/* Barra de Retenção Geral */}
+              <div className="space-y-2">
+                <div className="flex justify-between items-center text-xs font-black">
+                  <span className="text-natural-heading">Taxa de Actividade da Plataforma (90 dias)</span>
+                  <span className="text-emerald-700">{userStats.activePercent}% Activos ({userStats.activeUsers} de {userStats.totalUsers})</span>
+                </div>
+                <div className="w-full h-3 bg-natural-surface rounded-full overflow-hidden flex">
+                  <div style={{ width: `${userStats.activePercent}%` }} className="h-full bg-emerald-500 rounded-l-full transition-all duration-500" />
+                  <div style={{ width: `${userStats.inactivePercent}%` }} className="h-full bg-amber-400 rounded-r-full transition-all duration-500" />
+                </div>
+                <div className="flex justify-between text-[9px] font-bold text-natural-muted uppercase tracking-wider">
+                  <span>Activos (&le;90 dias): {userStats.activeUsers}</span>
+                  <span className="text-amber-700">Inactivos (&gt;90 dias): {userStats.inactiveUsers} ({userStats.inactivePercent}%)</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2">
+                {/* 2. Porque deixaste de utilizar? */}
+                <div className="p-4 bg-natural-surface/40 rounded-2xl border border-natural-line space-y-3">
+                  <h5 className="text-xs font-black text-natural-heading uppercase tracking-wide">
+                    2. Principais Motivos de Inactividade
+                  </h5>
+                  {Object.keys(feedbackStats.reasonCounts).length === 0 ? (
+                    <p className="text-xs text-natural-muted font-medium py-4 text-center">
+                      Ainda não foram submetidas respostas suficientes.
+                    </p>
+                  ) : (
+                    <div className="space-y-2.5">
+                      {Object.entries(feedbackStats.reasonCounts).map(([reason, count]) => {
+                        const pct = Math.round((Number(count) / (feedbackStats.total || 1)) * 100);
+                        return (
+                          <div key={reason} className="space-y-1">
+                            <div className="flex justify-between text-[11px] font-bold text-natural-heading">
+                              <span className="truncate pr-2">{reason}</span>
+                              <span className="text-natural-accent shrink-0 font-mono">{String(count)} ({pct}%)</span>
+                            </div>
+                            <div className="w-full h-1.5 bg-white rounded-full overflow-hidden">
+                              <div style={{ width: `${pct}%` }} className="h-full bg-natural-accent rounded-full" />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* 3. O que devemos melhorar? */}
+                <div className="p-4 bg-natural-surface/40 rounded-2xl border border-natural-line space-y-3">
+                  <h5 className="text-xs font-black text-natural-heading uppercase tracking-wide">
+                    3. Áreas de Melhoria Mais Solicitadas
+                  </h5>
+                  {Object.keys(feedbackStats.improvementCounts).length === 0 ? (
+                    <p className="text-xs text-natural-muted font-medium py-4 text-center">
+                      Aguardando submissões dos utilizadores.
+                    </p>
+                  ) : (
+                    <div className="space-y-2.5">
+                      {Object.entries(feedbackStats.improvementCounts).map(([improvement, count]) => {
+                        const pct = Math.round((Number(count) / (feedbackStats.total || 1)) * 100);
+                        return (
+                          <div key={improvement} className="space-y-1">
+                            <div className="flex justify-between text-[11px] font-bold text-natural-heading">
+                              <span className="truncate pr-2">{improvement}</span>
+                              <span className="text-blue-600 shrink-0 font-mono">{String(count)} ({pct}%)</span>
+                            </div>
+                            <div className="w-full h-1.5 bg-white rounded-full overflow-hidden">
+                              <div style={{ width: `${pct}%` }} className="h-full bg-blue-500 rounded-full" />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 4. Voltarias a utilizar? */}
+              <div className="p-4 bg-natural-surface/40 rounded-2xl border border-natural-line space-y-3">
+                <h5 className="text-xs font-black text-natural-heading uppercase tracking-wide">
+                  4. Propensão de Regresso dos Inactivos ("Voltarias a utilizar o Mozbiscates?")
+                </h5>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="bg-white p-3 rounded-xl border border-emerald-200 text-center">
+                    <p className="text-[10px] font-bold text-emerald-700 uppercase">Sim</p>
+                    <h6 className="text-lg font-black text-emerald-700">
+                      {feedbackStats.returnCounts['Sim.'] || 0}
+                    </h6>
+                  </div>
+                  <div className="bg-white p-3 rounded-xl border border-amber-200 text-center">
+                    <p className="text-[10px] font-bold text-amber-700 uppercase">Talvez com melhorias</p>
+                    <h6 className="text-lg font-black text-amber-700">
+                      {feedbackStats.returnCounts['Talvez, se houver melhorias.'] || 0}
+                    </h6>
+                  </div>
+                  <div className="bg-white p-3 rounded-xl border border-red-200 text-center">
+                    <p className="text-[10px] font-bold text-red-600 uppercase">Não</p>
+                    <h6 className="text-lg font-black text-red-600">
+                      {feedbackStats.returnCounts['Não.'] || 0}
+                    </h6>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TABELA DE UTILIZADORES: ACTIVOS, INACTIVOS OU TODOS */}
+          {['actives', 'inactives', 'all'].includes(retentionSubTab) && (() => {
+            const currentList = retentionSubTab === 'actives' 
+              ? userStats.activeUsersList 
+              : retentionSubTab === 'inactives' 
+                ? userStats.inactiveUsersList 
+                : userStats.allUsersList;
+
+            // Filtro por papel (worker, client, all)
+            const roleFiltered = currentList.filter(u => {
+              if (userRoleFilter === 'worker') return u.role === 'worker';
+              if (userRoleFilter === 'client') return u.role === 'client';
+              return true;
+            });
+
+            // Filtro por termo de pesquisa
+            const filteredUsers = roleFiltered.filter(u => {
+              if (!userSearchTerm.trim()) return true;
+              const term = userSearchTerm.toLowerCase();
+              const name = (u.fullName || u.name || '').toLowerCase();
+              const email = (u.email || '').toLowerCase();
+              const phone = (u.phone || '').toLowerCase();
+              const category = (u.category || '').toLowerCase();
+              const loc = (u.bairro || u.district || u.city || '').toLowerCase();
+              return name.includes(term) || email.includes(term) || phone.includes(term) || category.includes(term) || loc.includes(term);
+            });
+
+            return (
+              <div className="space-y-4 text-left">
+                {/* Barra de Pesquisa e Filtros */}
+                <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between bg-natural-surface/40 p-3 rounded-2xl border border-natural-line">
+                  {/* Campo de Busca */}
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-natural-muted absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={userSearchTerm}
+                      onChange={(e) => setUserSearchTerm(e.target.value)}
+                      placeholder={`Pesquisar ${retentionSubTab === 'actives' ? 'activos' : retentionSubTab === 'inactives' ? 'inactivos' : 'utilizadores'} por nome, email, telefone...`}
+                      className="w-full bg-white pl-10 pr-8 py-2 rounded-xl text-xs border border-natural-line focus:outline-none focus:border-natural-accent font-medium text-natural-heading placeholder:text-natural-muted/70"
+                    />
+                    {userSearchTerm && (
+                      <button
+                        type="button"
+                        onClick={() => setUserSearchTerm('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-natural-muted hover:text-natural-heading text-xs"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Filtro de Papel */}
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setUserRoleFilter('all')}
+                      className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all ${
+                        userRoleFilter === 'all' 
+                          ? 'bg-natural-heading text-white shadow-sm' 
+                          : 'bg-white border border-natural-line text-natural-muted hover:text-natural-heading'
+                      }`}
+                    >
+                      Todos ({currentList.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUserRoleFilter('worker')}
+                      className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all ${
+                        userRoleFilter === 'worker' 
+                          ? 'bg-orange-500 text-white shadow-sm' 
+                          : 'bg-white border border-natural-line text-natural-muted hover:text-orange-600'
+                      }`}
+                    >
+                      Biscateiros ({currentList.filter(u => u.role === 'worker').length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUserRoleFilter('client')}
+                      className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all ${
+                        userRoleFilter === 'client' 
+                          ? 'bg-blue-600 text-white shadow-sm' 
+                          : 'bg-white border border-natural-line text-natural-muted hover:text-blue-700'
+                      }`}
+                    >
+                      Clientes ({currentList.filter(u => u.role === 'client').length})
+                    </button>
+                  </div>
+                </div>
+
+                {/* Banner Contextual do Estado */}
+                <div className={`p-3 rounded-2xl text-xs font-bold flex items-center justify-between ${
+                  retentionSubTab === 'actives' 
+                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
+                    : retentionSubTab === 'inactives' 
+                      ? 'bg-amber-50 text-amber-800 border border-amber-200' 
+                      : 'bg-natural-surface text-natural-heading border border-natural-line'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    {retentionSubTab === 'actives' && <UserCheck className="w-4 h-4 text-emerald-600 shrink-0" />}
+                    {retentionSubTab === 'inactives' && <UserX className="w-4 h-4 text-amber-600 shrink-0" />}
+                    {retentionSubTab === 'all' && <Users className="w-4 h-4 text-natural-heading shrink-0" />}
+                    <span>
+                      {retentionSubTab === 'actives' && '🟢 Utilizadores Activos: registo, trabalho ou presença recente nos últimos 90 dias (3 meses).'}
+                      {retentionSubTab === 'inactives' && '⚠️ Utilizadores Inactivos: sem actividade há mais de 90 dias (elegíveis para pesquisa de retenção).'}
+                      {retentionSubTab === 'all' && '👥 Todos os Utilizadores: visão global de biscateiros e clientes da plataforma.'}
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-mono font-black shrink-0 ml-2">
+                    {filteredUsers.length} de {currentList.length}
+                  </span>
+                </div>
+
+                {filteredUsers.length === 0 ? (
+                  <div className="p-8 text-center bg-natural-surface/30 rounded-2xl text-xs font-bold text-natural-muted space-y-1">
+                    <p className="text-natural-heading font-black">Nenhum utilizador encontrado com os filtros actuais.</p>
+                    <p className="text-[10px]">Tenta alterar os termos de pesquisa ou selecionar outro filtro de papel.</p>
+                  </div>
+                ) : (
+                  <div className="border border-natural-line rounded-2xl overflow-x-auto shadow-sm">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-natural-surface border-b border-natural-line text-[9px] font-black text-natural-muted uppercase">
+                          <th className="p-3">Utilizador</th>
+                          <th className="p-3">Papel / Categoria</th>
+                          <th className="p-3">Estado & Actividade</th>
+                          <th className="p-3">Contacto / WhatsApp</th>
+                          <th className="p-3">Biscates / Saldo</th>
+                          <th className="p-3">Última Actividade</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-natural-line/60 bg-white">
+                        {filteredUsers.slice(0, 100).map((u) => {
+                          const waPhone = (u.phone || '').replace(/\D/g, '');
+                          const waNum = waPhone ? (waPhone.startsWith('258') ? waPhone : `258${waPhone}`) : null;
+                          const waMessage = encodeURIComponent(
+                            u.isActive 
+                              ? `Olá ${u.fullName || ''}! Tudo bem? Contactamos a partir da equipa Mozbiscates.` 
+                              : `Olá ${u.fullName || ''}! Notámos que não tem utilizado o Mozbiscates recentemente. Como podemos ajudar?`
+                          );
+
+                          return (
+                            <tr key={u.id || u.uid} className="hover:bg-natural-surface/30 transition-colors">
+                              <td className="p-3 font-bold text-natural-heading">
+                                <div className="flex items-center gap-2.5">
+                                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-black shrink-0 ${
+                                    u.isActive 
+                                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' 
+                                      : 'bg-amber-100 text-amber-800 border border-amber-300'
+                                  }`}>
+                                    {(u.fullName || u.email || 'U').charAt(0).toUpperCase()}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-1.5">
+                                      <p className="leading-tight truncate max-w-[140px] font-black">{u.fullName || 'Sem nome'}</p>
+                                      {u.verified && (
+                                        <CheckCircle2 className="w-3.5 h-3.5 text-natural-accent shrink-0" />
+                                      )}
+                                    </div>
+                                    <p className="text-[10px] text-natural-muted font-normal truncate max-w-[160px]">
+                                      {u.email || (u.id || u.uid || '').slice(0, 12)}
+                                    </p>
+                                  </div>
+                                </div>
+                              </td>
+
+                              <td className="p-3">
+                                <div className="space-y-0.5">
+                                  <span className={`inline-block px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${
+                                    u.role === 'worker' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'
+                                  }`}>
+                                    {u.role === 'worker' ? 'Biscateiro' : 'Cliente'}
+                                  </span>
+                                  {u.category && (
+                                    <p className="text-[10px] font-bold text-natural-muted truncate max-w-[120px]">
+                                      {u.category}
+                                    </p>
+                                  )}
+                                </div>
+                              </td>
+
+                              <td className="p-3">
+                                {u.isActive ? (
+                                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-bold">
+                                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                                    <span>
+                                      Activo {u.daysInactive === 0 ? '(Hoje)' : u.daysInactive === 1 ? '(Ontem)' : `(há ${u.daysInactive}d)`}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-50 border border-amber-200 text-amber-800 text-[10px] font-bold">
+                                    <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                                    <span>Inactivo (+{u.daysInactive}d)</span>
+                                  </div>
+                                )}
+                              </td>
+
+                              <td className="p-3">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono text-natural-muted text-[11px]">
+                                    {u.phone || 'Sem telefone'}
+                                  </span>
+                                  {waNum && (
+                                    <a
+                                      href={`https://wa.me/${waNum}?text=${waMessage}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="p-1 rounded-lg bg-emerald-50 hover:bg-emerald-600 text-emerald-600 hover:text-white transition-colors"
+                                      title="Enviar mensagem WhatsApp"
+                                    >
+                                      <Phone className="w-3.5 h-3.5" />
+                                    </a>
+                                  )}
+                                </div>
+                              </td>
+
+                              <td className="p-3">
+                                <div className="space-y-0.5">
+                                  <p className="font-bold text-natural-heading text-[11px]">
+                                    {u.totalJobs || 0} {u.totalJobs === 1 ? 'biscate' : 'biscates'}
+                                  </p>
+                                  {u.role === 'worker' && u.balance !== undefined && (
+                                    <p className="text-[10px] font-mono text-natural-accent font-black">
+                                      {Number(u.balance || 0).toLocaleString('pt-MZ')} MT
+                                    </p>
+                                  )}
+                                </div>
+                              </td>
+
+                              <td className="p-3 text-natural-muted text-[10px]">
+                                <div className="space-y-0.5">
+                                  <p className="font-medium">
+                                    {u.lastActiveDate ? u.lastActiveDate.toLocaleDateString('pt-MZ') : 'Desconhecida'}
+                                  </p>
+                                  <p className="text-[9px] text-natural-muted/80">
+                                    {u.bairro || u.city || 'Moçambique'}
+                                  </p>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {retentionSubTab === 'feedbacks' && (
+            <div className="space-y-3 text-left">
+              {feedbacks.length === 0 ? (
+                <div className="p-8 text-center bg-natural-surface/30 rounded-2xl text-xs font-bold text-natural-muted">
+                  Nenhum questionário "Queremos melhorar! 💙" submetido até ao momento.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {feedbacks.map((f) => (
+                    <div key={f.id} className="p-4 rounded-2xl border-2 border-natural-line bg-white shadow-sm space-y-3 text-left">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <span className="text-[9px] font-black uppercase tracking-wider text-natural-accent bg-natural-accent/10 px-2 py-0.5 rounded-full">
+                            {f.userRole === 'worker' ? 'Biscateiro' : 'Cliente'}
+                          </span>
+                          <h6 className="font-black text-xs text-natural-heading mt-1">
+                            {f.userName || f.userEmail || 'Utilizador'}
+                          </h6>
+                        </div>
+                        <span className="text-[10px] font-mono text-natural-muted">
+                          {f.createdAt?.seconds ? new Date(f.createdAt.seconds * 1000).toLocaleDateString('pt-MZ') : 'Recente'}
+                        </span>
+                      </div>
+
+                      <div className="space-y-1.5 text-xs">
+                        <p><strong className="text-natural-heading">Uso:</strong> <span className="text-natural-muted">{f.usageType}</span></p>
+                        <p><strong className="text-natural-heading">Motivo:</strong> <span className="text-amber-700 font-bold">{f.reason}</span></p>
+                        <p><strong className="text-natural-heading">Melhoria:</strong> <span className="text-blue-700">{f.improvements}</span></p>
+                        <p><strong className="text-natural-heading">Voltaria:</strong> <span className="text-natural-heading font-black">{f.returnLikelihood}</span></p>
+                        {f.suggestion && (
+                          <div className="mt-2 p-2.5 rounded-xl bg-natural-surface text-[11px] italic text-natural-heading border border-natural-line/60">
+                            "{f.suggestion}"
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -5652,6 +6753,9 @@ function MainApp() {
   const [activeEmergencyJob, setActiveEmergencyJob] = useState<any>(null);
   const [showClientProfileModal, setShowClientProfileModal] = useState(false);
   const [emergencyAlerts, setEmergencyAlerts] = useState<any[]>([]);
+  const [showInactivityModal, setShowInactivityModal] = useState(false);
+  const [allUsers, setAllUsers] = useState<any[]>([]);
+  const [inactivityFeedbacks, setInactivityFeedbacks] = useState<any[]>([]);
 
   const t = translations[lang] || translations.pt;
   const isAdminEmail = currentUser?.email === 'fushawshaw@gmail.com' || currentUser?.email === 'wanderj419@gmail.com' || currentUser?.email === 'mozbiscates@gmail.com';
@@ -6553,6 +7657,91 @@ function MainApp() {
     }
   }, [rawProviders]);
 
+  // 1. Sync all registered users & inactivity feedbacks for Admin Dashboard
+  useEffect(() => {
+    if (role !== 'admin' || !currentUser) {
+      setAllUsers([]);
+      setInactivityFeedbacks([]);
+      return;
+    }
+
+    const qUsers = query(collection(db, 'users'), limit(500));
+    const unsubUsers = onSnapshot(qUsers, (snap) => {
+      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setAllUsers(data);
+    }, (err) => {
+      console.warn("Notice: users sync for admin metrics:", err);
+    });
+
+    const qFeedbacks = query(collection(db, 'inactivity_feedback'), limit(200));
+    const unsubFeedbacks = onSnapshot(qFeedbacks, (snap) => {
+      const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as any));
+      data.sort((a, b) => {
+        const timeA = a.createdAt?.seconds ? a.createdAt.seconds * 1000 : 0;
+        const timeB = b.createdAt?.seconds ? b.createdAt.seconds * 1000 : 0;
+        return timeB - timeA;
+      });
+      setInactivityFeedbacks(data);
+    }, (err) => {
+      console.warn("Notice: inactivity feedbacks sync for admin:", err);
+    });
+
+    return () => {
+      unsubUsers();
+      unsubFeedbacks();
+    };
+  }, [role, currentUser]);
+
+  // 2. Automated detection of inactive users (> 90 dias / 3 meses) on session entry
+  useEffect(() => {
+    if (!currentUser || !userData) return;
+
+    const feedbackSubmittedKey = `mozbiscates_feedback_submitted_${currentUser.uid}`;
+    if (localStorage.getItem(feedbackSubmittedKey)) return;
+
+    const feedbackDismissedSessionKey = `mozbiscates_feedback_dismissed_${currentUser.uid}`;
+    if (sessionStorage.getItem(feedbackDismissedSessionKey)) return;
+
+    const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+    const rawDate = userData.lastActiveAt || userData.updatedAt || userData.createdAt;
+
+    if (rawDate) {
+      let lastDate: Date | null = null;
+      if (typeof rawDate.toDate === 'function') lastDate = rawDate.toDate();
+      else if (rawDate instanceof Date) lastDate = rawDate;
+      else if (rawDate.seconds) lastDate = new Date(rawDate.seconds * 1000);
+      else {
+        const d = new Date(rawDate);
+        if (!isNaN(d.getTime())) lastDate = d;
+      }
+
+      if (lastDate && (Date.now() - lastDate.getTime() > NINETY_DAYS_MS)) {
+        const timer = setTimeout(() => {
+          setShowInactivityModal(true);
+          sessionStorage.setItem(feedbackDismissedSessionKey, 'true');
+        }, 1500);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [currentUser, userData]);
+
+  // 3. Throttled activity heartbeat to update lastActiveAt (once per 24 hours per user)
+  useEffect(() => {
+    if (!currentUser) return;
+    const HEARTBEAT_KEY = `mozbiscates_active_heartbeat_${currentUser.uid}`;
+    const lastPing = localStorage.getItem(HEARTBEAT_KEY);
+    const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    if (!lastPing || (now - Number(lastPing) > ONE_DAY_MS)) {
+      localStorage.setItem(HEARTBEAT_KEY, String(now));
+      updateDoc(doc(db, 'users', currentUser.uid), {
+        lastActiveAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      }).catch(() => {});
+    }
+  }, [currentUser]);
+
   useEffect(() => {
     if (!currentUser) {
       setJobs([]);
@@ -6990,6 +8179,15 @@ function MainApp() {
           isMandatory={false}
         />
       )}
+
+      {/* Formulário Oficial de Inactividade e Melhoria ("Queremos melhorar! 💙") */}
+      <InactivityFeedbackModal
+        isOpen={showInactivityModal}
+        onClose={() => setShowInactivityModal(false)}
+        currentUser={currentUser}
+        userData={combinedUserData}
+        role={role}
+      />
       
       <div className="w-full max-w-md bg-natural-bg min-h-screen flex flex-col relative overflow-hidden">
         
@@ -7539,7 +8737,13 @@ function MainApp() {
                       />
                    </div>
                  ) : role === 'admin' && adminView === 'metrics' ? (
-                   <AdminMetrics jobs={jobs} t={t} />
+                   <AdminMetrics 
+                     jobs={jobs} 
+                     users={allUsers} 
+                     feedbacks={inactivityFeedbacks} 
+                     onPreviewInactivityModal={() => setShowInactivityModal(true)} 
+                     t={t} 
+                   />
                  ) : role === 'admin' && adminView === 'alerts' ? (
                    <AdminEmergencyMonitor alerts={emergencyAlerts} />
                  ) : (
@@ -7579,6 +8783,27 @@ function MainApp() {
                        >
                          <MessageSquare className="w-6 h-6" /> {t.talkWhatsapp}
                        </a>
+                    </div>
+
+                    <div className="bg-white p-6 rounded-[2rem] border-2 border-natural-line shadow-sm flex flex-col justify-between">
+                       <div>
+                         <div className="flex items-center gap-2 mb-2">
+                           <span className="p-2 rounded-xl bg-emerald-50 text-natural-accent">
+                             <MessageSquareHeart className="w-5 h-5" />
+                           </span>
+                           <h4 className="font-black text-natural-heading uppercase tracking-wide">Queremos melhorar! 💙</h4>
+                         </div>
+                         <p className="text-sm text-natural-muted font-medium mb-6 leading-relaxed">
+                           A tua opinião é fundamental para melhorarmos a tua experiência no Mozbiscates. Responde ao nosso questionário rápido!
+                         </p>
+                       </div>
+                       <button
+                         onClick={() => setShowInactivityModal(true)}
+                         className="w-full bg-natural-heading text-white font-black py-5 rounded-2xl flex items-center justify-center gap-2 shadow-xl active:scale-95 transition-transform mt-auto"
+                       >
+                         <MessageSquareHeart className="w-5 h-5 text-natural-accent" />
+                         <span>Dar a Minha Opinião 💙</span>
+                       </button>
                     </div>
 
                       <div className="bg-white p-6 rounded-[2rem] border-2 border-natural-line shadow-sm flex flex-col justify-between border-dashed border-natural-accent/50 relative overflow-hidden group">

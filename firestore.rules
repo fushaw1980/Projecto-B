@@ -52,7 +52,8 @@ service cloud.firestore {
              (data.get('phone', null) == null || (data.phone is string && data.phone.size() <= 30)) &&
              (data.get('bairro', null) == null || (data.bairro is string && data.bairro.size() <= 80)) &&
              (data.get('city', null) == null || (data.city is string && data.city.size() <= 80)) &&
-             (data.get('updatedAt', null) == null || data.updatedAt == request.time);
+             (data.get('updatedAt', null) == null || data.updatedAt == request.time) &&
+             (data.get('lastActiveAt', null) == null || data.lastActiveAt == request.time);
     }
 
     // --- Collection: users (Perfis de Utilizador: client, worker, admin) ---
@@ -88,7 +89,7 @@ service cloud.firestore {
           isOwner(userId) && isValidUser(incoming()) && 
           incoming().diff(existing()).affectedKeys().hasOnly([
             'fullName', 'role', 'category', 'specialty', 'specialties', 'bairro', 'city', 'phone', 
-            'photo', 'portfolio', 'level', 'jobs', 'balance', 'verified', 'updatedAt', 'rating'
+            'photo', 'portfolio', 'level', 'jobs', 'balance', 'verified', 'updatedAt', 'rating', 'lastActiveAt'
           ]) &&
           // Cannot tamper with verified status without admin
           (incoming().get('verified', false) == existing().get('verified', false) || isAdmin()) &&
@@ -227,6 +228,21 @@ service cloud.firestore {
                          incoming().text is string && incoming().text.size() <= 2000;
         allow update, delete: if isAdmin();
       }
+    }
+
+    // --- Inactivity Churn & User Feedback Survey (Queremos melhorar! 💙) ---
+    match /inactivity_feedback/{feedbackId} {
+      allow get: if isSignedIn() && isValidId(feedbackId) && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && isValidId(feedbackId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().usageType in ['Procurava serviços.', 'Oferecia serviços como biscateiro.', 'Ambas as opções.'] &&
+                       incoming().reason is string && incoming().reason.size() <= 400 &&
+                       incoming().improvements is string && incoming().improvements.size() <= 400 &&
+                       incoming().returnLikelihood in ['Sim.', 'Talvez, se houver melhorias.', 'Não.'] &&
+                       (incoming().get('suggestion', null) == null || (incoming().suggestion is string && incoming().suggestion.size() <= 1000)) &&
+                       incoming().createdAt == request.time;
+      allow update, delete: if isAdmin();
     }
   }
 }
