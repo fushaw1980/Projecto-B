@@ -3,6 +3,8 @@ import { motion } from 'motion/react';
 import { ShieldCheck, User, Phone, MapPin, Camera, Lock, CheckCircle2, AlertTriangle, HeartHandshake } from 'lucide-react';
 import { compressImage } from '../lib/imageOptimizer';
 
+import { isValidMozPhone, cleanPhone, normalizeMozPhone } from '../lib/phoneUtils';
+
 interface ClientSecurityProfileModalProps {
   initialData?: any;
   onSave: (data: {
@@ -11,9 +13,9 @@ interface ClientSecurityProfileModalProps {
     bairro: string;
     city: string;
     photo: string;
-    biPhoto: string;
-    emergencyContactName: string;
-    emergencyContactPhone: string;
+    biPhoto?: string;
+    emergencyContactName?: string;
+    emergencyContactPhone?: string;
   }) => Promise<void> | void;
   onCancel?: () => void;
   isMandatory?: boolean;
@@ -28,7 +30,7 @@ export const ClientSecurityProfileModal: React.FC<ClientSecurityProfileModalProp
   const [fullName, setFullName] = useState(initialData?.fullName || '');
   const [phone, setPhone] = useState(initialData?.phone || '');
   const [bairro, setBairro] = useState(initialData?.bairro || 'Polana Caniço');
-  const [city, setCity] = useState(initialData?.city || 'Maputo');
+  const [city, setCity] = useState(initialData?.city || 'Maputo Cidade');
   const [photo, setPhoto] = useState<string | null>(initialData?.photo || null);
   const [biPhoto, setBiPhoto] = useState<string | null>(initialData?.biPhoto || null);
   const [emergencyContactName, setEmergencyContactName] = useState(initialData?.emergencyContactName || '');
@@ -58,25 +60,23 @@ export const ClientSecurityProfileModal: React.FC<ClientSecurityProfileModalProp
       setError('Por favor, informe seu nome completo oficial.');
       return;
     }
-    if (!phone.trim() || phone.trim().length < 8) {
-      setError('Informe um número de telefone moçambicano válido (ex: 84/85/86/87).');
-      return;
-    }
-    if (!biPhoto) {
-      setError('A foto do seu Bilhete de Identidade (BI) ou DIRE é obrigatória para prevenção de crimes.');
+    const clean = cleanPhone(phone);
+    if (!clean || !isValidMozPhone(clean)) {
+      setError('Informe um número de WhatsApp moçambicano válido (ex: 84/85/86/87...).');
       return;
     }
 
     setIsSubmitting(true);
     setError(null);
     try {
+      const normalizedPhone = normalizeMozPhone(clean);
       await onSave({
         fullName: fullName.trim(),
-        phone: phone.trim(),
+        phone: normalizedPhone,
         bairro: bairro.trim(),
         city: city.trim(),
         photo: photo || '',
-        biPhoto,
+        biPhoto: biPhoto || '',
         emergencyContactName: emergencyContactName.trim(),
         emergencyContactPhone: emergencyContactPhone.trim()
       });
@@ -185,18 +185,19 @@ export const ClientSecurityProfileModal: React.FC<ClientSecurityProfileModalProp
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-[11px] font-black uppercase tracking-wider text-natural-muted mb-1">
-                  Telefone / M-Pesa *
+                <label className="block text-[11px] font-black uppercase tracking-wider text-emerald-800 mb-1 flex items-center gap-1">
+                  <Phone className="w-3.5 h-3.5 text-emerald-600 inline" />
+                  <span>WhatsApp (Obrigatório) *</span>
                 </label>
-                <div className="flex items-center gap-2 px-3 py-3 bg-slate-50 border border-natural-line rounded-xl focus-within:border-emerald-600 focus-within:bg-white transition-all">
-                  <Phone className="w-4 h-4 text-slate-400 shrink-0" />
+                <div className="flex items-center gap-1.5 px-3 py-3 bg-slate-50 border border-emerald-300 rounded-xl focus-within:border-emerald-600 focus-within:bg-white transition-all">
+                  <span className="font-mono font-bold text-[11px] text-emerald-900 shrink-0">🇲🇿 +258</span>
                   <input
                     type="tel"
                     required
-                    placeholder="84 / 85 / 86..."
+                    placeholder="84 123 4567"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
-                    className="w-full text-sm font-semibold bg-transparent outline-none text-natural-heading"
+                    className="w-full text-sm font-semibold bg-transparent outline-none text-natural-heading font-mono"
                   />
                 </div>
               </div>

@@ -75,7 +75,8 @@ import {
   Users,
   UserCheck,
   UserX,
-  MessageSquareHeart
+  MessageSquareHeart,
+  MessageCircle
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { motion, AnimatePresence } from 'motion/react';
@@ -85,6 +86,14 @@ import { ALL_SPECIALTIES, FREQUENT_CATEGORIES } from './data/specialties';
 import { ClientSecurityProfileModal } from './components/ClientSecurityProfileModal';
 import { EmergencyModal } from './components/EmergencyModal';
 import { AdminEmergencyMonitor } from './components/AdminEmergencyMonitor';
+import { MandatoryWhatsAppModal } from './components/MandatoryWhatsAppModal';
+import { 
+  getWhatsAppUrl, 
+  isValidMozPhone, 
+  normalizeMozPhone, 
+  cleanPhone, 
+  formatDisplayPhone 
+} from './lib/phoneUtils';
 import { calculateHaversineDistanceKm, estimateTravelTime, getProviderCoordinates } from './lib/geoUtils';
 import {
   ResponsiveContainer,
@@ -545,7 +554,9 @@ interface Job {
   rescheduledAt?: any;
   rescheduleNote?: string;
   clientName?: string;
+  clientPhone?: string;
   providerName?: string;
+  providerPhone?: string;
   bairro?: string;
   createdAt: any;
   updatedAt?: any;
@@ -2513,6 +2524,37 @@ const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt', onPani
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Botão de Contacto Directo WhatsApp para Formulários e Detalhes */}
+      {(() => {
+        const targetPhone = role === 'client' 
+          ? (job.providerPhone || (job as any).providerPhone) 
+          : (job.clientPhone || (job as any).clientPhone);
+        
+        const targetName = role === 'client' 
+          ? (job.providerName || 'Prestador') 
+          : (job.clientName || 'Cliente');
+
+        if (!targetPhone) return null;
+
+        const waMsg = role === 'client'
+          ? `Olá ${targetName}! Contacto a partir do Mozbiscates referente ao serviço de ${job.category} (Biscate #${job.id.slice(0, 8)}).`
+          : `Olá ${targetName}! Sou o prestador de ${job.category} no Mozbiscates para o seu serviço (Biscate #${job.id.slice(0, 8)}).`;
+
+        return (
+          <div className="mb-4">
+            <a
+              href={getWhatsAppUrl(targetPhone, waMsg)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full bg-[#25D366] hover:bg-[#20ba59] active:scale-98 text-white font-black py-2.5 px-3 rounded-2xl flex items-center justify-center gap-2 text-xs shadow-md shadow-emerald-500/15 transition-all uppercase tracking-wider"
+            >
+              <Phone className="w-3.5 h-3.5 fill-white shrink-0" />
+              <span>Contactar {role === 'client' ? 'Prestador' : 'Cliente'} no WhatsApp</span>
+            </a>
+          </div>
+        );
+      })()}
 
       <div className="flex items-center gap-2 mb-6 text-center">
          <div className="flex-1 bg-natural-surface p-3 rounded-2xl">
@@ -5351,6 +5393,7 @@ const AuthScreen = ({ onAuthSuccess, t, lang }: { onAuthSuccess: (user: Firebase
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -5401,6 +5444,15 @@ const AuthScreen = ({ onAuthSuccess, t, lang }: { onAuthSuccess: (user: Firebase
     e.preventDefault();
     setError('');
     setMessage('');
+
+    if (mode === 'register') {
+      const clean = cleanPhone(phone);
+      if (!clean || !isValidMozPhone(clean)) {
+        setError('Por favor, introduza um número de WhatsApp moçambicano válido (ex: 84/85/86/87...).');
+        return;
+      }
+    }
+
     setLoading(true);
 
     try {
@@ -5409,6 +5461,14 @@ const AuthScreen = ({ onAuthSuccess, t, lang }: { onAuthSuccess: (user: Firebase
         onAuthSuccess(res.user);
       } else if (mode === 'register') {
         const res = await createUserWithEmailAndPassword(auth, email, password);
+        const normalizedPhone = normalizeMozPhone(cleanPhone(phone));
+        await setDoc(doc(db, 'users', res.user.uid), {
+          uid: res.user.uid,
+          email: res.user.email,
+          phone: normalizedPhone,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        }, { merge: true }).catch((err) => console.warn('User profile initial phone notice:', err));
         onAuthSuccess(res.user);
       }
     } catch (err: any) {
@@ -5622,6 +5682,28 @@ const AuthScreen = ({ onAuthSuccess, t, lang }: { onAuthSuccess: (user: Firebase
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
+
+            {mode === 'register' && (
+              <div className="space-y-1">
+                <div className="flex items-center bg-white border-2 border-emerald-300 rounded-2xl p-1.5 focus-within:border-emerald-600 transition-all shadow-sm">
+                  <div className="flex items-center gap-1 px-3 py-2 bg-emerald-50 rounded-xl font-mono font-bold text-xs text-emerald-900 shrink-0 border border-emerald-200">
+                    <span>🇲🇿</span>
+                    <span>+258</span>
+                  </div>
+                  <input 
+                    type="tel" 
+                    required
+                    placeholder="WhatsApp Obrigatório (ex: 84 123 4567)"
+                    className="w-full px-3 py-2.5 bg-transparent outline-none font-mono font-bold text-sm text-natural-heading placeholder:text-natural-muted/70"
+                    value={phone}
+                    onChange={e => setPhone(e.target.value)}
+                  />
+                </div>
+                <p className="text-[9px] text-emerald-800 font-bold px-2">
+                  Obrigatório para receber pedidos e formulários diretos de serviço.
+                </p>
+              </div>
+            )}
 
             <button 
               type="submit" 
@@ -6147,8 +6229,9 @@ const RoleSelection = ({ onSelect, onBack, lang, setLang, t, currentUser, isAdmi
   );
 };
 
-const WorkerProfileForm = ({ onSave, t }: { onSave: (data: { name: string, category: string, photo: string, biPhoto: string, biSelfie: string, verified: boolean, portfolio: string[], nuit?: string, emergencyContactName?: string, emergencyContactPhone?: string, specialty?: string }) => void, t: any }) => {
+const WorkerProfileForm = ({ onSave, t, initialPhone }: { onSave: (data: { name: string, phone: string, category: string, photo: string, biPhoto: string, biSelfie: string, verified: boolean, portfolio: string[], nuit?: string, emergencyContactName?: string, emergencyContactPhone?: string, specialty?: string }) => void, t: any, initialPhone?: string }) => {
   const [name, setName] = useState('');
+  const [phone, setPhone] = useState(initialPhone || '');
   const [category, setCategory] = useState('Electricista Profissional');
   const [nuit, setNuit] = useState('');
   const [emergencyContactName, setEmergencyContactName] = useState('');
@@ -6205,6 +6288,12 @@ const WorkerProfileForm = ({ onSave, t }: { onSave: (data: { name: string, categ
   const handleFinalize = async () => {
     if (!biPhoto || !biSelfie) return;
     
+    const cleaned = cleanPhone(phone);
+    if (!isValidMozPhone(cleaned)) {
+      setError('Por favor, introduza um número WhatsApp de Moçambique válido (ex: 84 123 4567 ou 82/83/85/86/87).');
+      return;
+    }
+
     setIsValidating(true);
     setError(null);
 
@@ -6224,6 +6313,7 @@ const WorkerProfileForm = ({ onSave, t }: { onSave: (data: { name: string, categ
       if (analysis.valid) {
         onSave({ 
           name: analysis.nameOnId || name, 
+          phone: normalizeMozPhone(cleaned),
           category, 
           photo: photo || '', 
           biPhoto, 
@@ -6286,6 +6376,32 @@ const WorkerProfileForm = ({ onSave, t }: { onSave: (data: { name: string, categ
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
+          </div>
+
+          {/* WhatsApp de Contacto Direto Obrigatório */}
+          <div className="space-y-1">
+            <div className="flex justify-between items-center px-2">
+              <label className="text-[10px] font-black uppercase text-natural-muted tracking-[0.2em] flex items-center gap-1.5">
+                <MessageCircle className="w-3.5 h-3.5 text-emerald-600" />
+                <span>WhatsApp de Contacto</span>
+              </label>
+              <span className="text-[9px] font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                Obrigatório
+              </span>
+            </div>
+            <div className="bg-white border-2 border-natural-line p-3.5 rounded-2xl flex items-center gap-2.5 shadow-sm focus-within:border-emerald-500 transition-colors">
+              <span className="px-2.5 py-1 bg-emerald-50 text-emerald-800 rounded-xl text-xs font-black border border-emerald-200 shrink-0">
+                🇲🇿 +258
+              </span>
+              <input 
+                type="tel" 
+                placeholder="84 123 4567" 
+                className="w-full outline-none font-bold text-sm text-natural-heading bg-transparent"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+              />
+            </div>
+            <p className="text-[9px] text-natural-muted px-2">Clientes entrarão em contacto diretamente pelo seu WhatsApp para orçamentos e detalhes.</p>
           </div>
 
           {/* Campo NUIT (Opcional) */}
@@ -6483,7 +6599,7 @@ const WorkerProfileForm = ({ onSave, t }: { onSave: (data: { name: string, categ
 
         <button 
           onClick={handleFinalize} 
-          disabled={!name || !biPhoto || !biSelfie || isValidating || isCompressing}
+          disabled={!name || !phone.trim() || !biPhoto || !biSelfie || isValidating || isCompressing}
           className="w-full bg-natural-accent text-white font-black py-5 rounded-[2rem] shadow-xl shadow-natural-accent/30 text-lg uppercase tracking-widest mt-4 active:scale-95 transition-transform disabled:opacity-50 flex items-center justify-center gap-3"
         >
           {isValidating || isCompressing ? (
@@ -7182,10 +7298,8 @@ function MainApp() {
       // Since 'open' status might be different from 'AGUARDANDO_DEPOSITO', we listen for AGUARDANDO_DEPOSITO which are newly created jobs
       const q = query(
         collection(db, 'jobs'),
-        where('category', '==', userCategory),
         where('status', '==', 'AGUARDANDO_DEPOSITO'),
-        orderBy('createdAt', 'desc'),
-        limit(5)
+        limit(20)
       );
 
       let isFirstSync = true;
@@ -7196,6 +7310,9 @@ function MainApp() {
               const data = change.doc.data();
               const jobId = change.doc.id;
               
+              // Filter by category in-memory to avoid Firestore composite index requirement
+              if (data.category && !data.category.toLowerCase().includes(userCategory.toLowerCase()) && !userCategory.toLowerCase().includes(data.category.toLowerCase())) return;
+
               // Filter by bairro
               if (userBairro && data.bairro && data.bairro !== userBairro) return;
 
@@ -7756,11 +7873,15 @@ function MainApp() {
       : query(
           collection(db, 'jobs'),
           where(role === 'client' ? 'clientId' : 'providerId', '==', currentUser.uid),
-          orderBy('createdAt', 'desc'),
           limit(100)
         );
     const unsubscribe = onSnapshot(q, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as any));
+      data.sort((a, b) => {
+        const timeA = a.createdAt?.seconds ? a.createdAt.seconds * 1000 : (a.createdAt instanceof Date ? a.createdAt.getTime() : 0);
+        const timeB = b.createdAt?.seconds ? b.createdAt.seconds * 1000 : (b.createdAt instanceof Date ? b.createdAt.getTime() : 0);
+        return timeB - timeA;
+      });
       
       if (role === 'worker') {
         if (!hasInitialJobsLoadedRef.current) {
@@ -7874,7 +7995,9 @@ function MainApp() {
         category: p.category.slice(0, 60),
         clientId: currentUser.uid,
         clientName: (userData?.fullName || 'Cliente').slice(0, 100),
+        clientPhone: userData?.phone || '',
         providerName: p.name.slice(0, 100),
+        providerPhone: p.phone || '',
         bairro: (userData?.bairro || bairro || '').slice(0, 60),
         amount: parsedAmount,
         description: sanitizedDesc,
@@ -7924,6 +8047,7 @@ function MainApp() {
         uid: currentUser.uid,
         fullName: providerData.name,
         role: 'worker',
+        phone: providerData.phone || userData?.phone || '',
         category: providerData.category,
         specialty: providerData.specialty || providerData.category,
         specialties: [providerData.category],
@@ -7973,6 +8097,19 @@ function MainApp() {
       setShowClientProfileModal(false);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `users/${currentUser?.uid || 'unknown'}`);
+    }
+  };
+
+  const handleSaveMandatoryPhone = async (normalizedPhone: string) => {
+    if (!currentUser) return;
+    try {
+      await updateDoc(doc(db, 'users', currentUser.uid), {
+        phone: normalizedPhone,
+        updatedAt: serverTimestamp()
+      });
+      setUserData((prev: any) => ({ ...(prev || {}), phone: normalizedPhone }));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `users/${currentUser?.uid}`);
     }
   };
 
@@ -8132,13 +8269,13 @@ function MainApp() {
           <h1 className="font-black italic text-xl">Mozbiscates</h1>
           <button onClick={handleLogout} className="text-natural-muted font-black text-[10px] uppercase">{t.logout || 'Sair'}</button>
         </header>
-        <WorkerProfileForm onSave={handleCreateProfile} t={t} />
+        <WorkerProfileForm onSave={handleCreateProfile} t={t} initialPhone={userData?.phone || ''} />
       </div>
     );
   }
 
-  // Cadastro Obrigatório de Segurança para Quem Precisa de Serviços (Cliente)
-  if (role === 'client' && (!combinedUserData?.phone || !combinedUserData?.biPhoto)) {
+  // Cadastro Obrigatório de Segurança e Contacto para Clientes
+  if (role === 'client' && (!combinedUserData?.phone || !isValidMozPhone(cleanPhone(combinedUserData?.phone)))) {
     return (
       <div className="min-h-screen bg-natural-bg p-4 flex flex-col items-center justify-center">
         <header className="w-full max-w-lg py-4 flex justify-between items-center mb-4">
@@ -8179,6 +8316,15 @@ function MainApp() {
           isMandatory={false}
         />
       )}
+
+      {/* Modal Obrigatório de Registo de WhatsApp para Contacto Direto e Formulários */}
+      <MandatoryWhatsAppModal
+        isOpen={Boolean(currentUser && role && (!combinedUserData?.phone || !isValidMozPhone(cleanPhone(combinedUserData.phone))))}
+        userRole={role}
+        userName={combinedUserData?.fullName}
+        currentPhone={combinedUserData?.phone}
+        onSavePhone={handleSaveMandatoryPhone}
+      />
 
       {/* Formulário Oficial de Inactividade e Melhoria ("Queremos melhorar! 💙") */}
       <InactivityFeedbackModal
@@ -8647,7 +8793,7 @@ function MainApp() {
                  </div>
                </div>
              ) : (
-               <WorkerProfileForm onSave={handleCreateProfile} t={t} />
+               <WorkerProfileForm onSave={handleCreateProfile} t={t} initialPhone={userData?.phone || ''} />
              )}
           </div>
         ) : (
@@ -9139,13 +9285,28 @@ function MainApp() {
                   )}
                 </div>
 
-                <div className="flex gap-3">
-                  <button onClick={() => handleSMSBooking(selectedProvider)} className="flex-1 bg-white border-2 border-natural-line text-natural-muted font-black py-5 rounded-[1.5rem] flex items-center justify-center gap-2 hover:border-natural-accent transition-all active:scale-95">
-                    <MessageSquare className="w-5 h-5 text-natural-accent" /> <span className="text-xs uppercase">{t.orderSms}</span>
-                  </button>
-                  <button onClick={() => handleStartBiscate(selectedProvider)} className="flex-[2] bg-natural-accent text-white font-black py-5 rounded-[1.5rem] shadow-2xl shadow-natural-accent/30 uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-95 transition-transform">
-                    {t.bookApp}
-                  </button>
+                <div className="flex flex-col gap-2.5">
+                  <div className="flex gap-2">
+                    {selectedProvider.phone ? (
+                      <a 
+                        href={getWhatsAppUrl(selectedProvider.phone, `Olá ${selectedProvider.name}! Encontrei o seu perfil no Mozbiscates (${selectedProvider.category}) e gostaria de orçamentar um serviço.`)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-black py-4 px-3 rounded-[1.5rem] flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 active:scale-95 transition-all text-center"
+                      >
+                        <MessageCircle className="w-5 h-5 fill-white shrink-0" />
+                        <span className="text-xs uppercase tracking-wide">WhatsApp</span>
+                      </a>
+                    ) : (
+                      <button onClick={() => handleSMSBooking(selectedProvider)} className="flex-1 bg-white border-2 border-natural-line text-natural-muted font-black py-4 rounded-[1.5rem] flex items-center justify-center gap-2 hover:border-natural-accent transition-all active:scale-95">
+                        <MessageSquare className="w-5 h-5 text-natural-accent" /> <span className="text-xs uppercase">{t.orderSms}</span>
+                      </button>
+                    )}
+                    <button onClick={() => handleStartBiscate(selectedProvider)} className="flex-[1.6] bg-natural-accent text-white font-black py-4 px-3 rounded-[1.5rem] shadow-xl shadow-natural-accent/30 uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-95 transition-transform flex items-center justify-center gap-2">
+                      <Zap className="w-4 h-4" />
+                      <span>{t.bookApp}</span>
+                    </button>
+                  </div>
                 </div>
               </motion.div>
             </>
