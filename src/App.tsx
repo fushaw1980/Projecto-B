@@ -133,7 +133,14 @@ import {
   serverTimestamp,
   increment
 } from 'firebase/firestore';
-import { auth, db } from './lib/firebase';
+import {
+  auth,
+  db,
+  DEMO_ACCOUNTS,
+  getDemoAccountConfig,
+  isDemoPresentationEmail,
+  provisionDemoAccount
+} from './lib/firebase';
 
 // --- Types ---
 enum OperationType {
@@ -419,8 +426,12 @@ const MapView = memo(({
               <Popup className="premium-popup">
                 <div className="p-3 min-w-[200px]">
                   <div className="flex items-center gap-3 mb-2.5 pb-2.5 border-b border-natural-line/30">
-                    <div className="w-10 h-10 rounded-2xl bg-natural-surface border border-natural-line overflow-hidden shadow-sm shrink-0">
-                      <img src={p.photo} alt={p.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                    <div className="w-10 h-10 rounded-2xl bg-natural-surface border border-natural-line overflow-hidden shadow-sm shrink-0 flex items-center justify-center">
+                      {p.photo ? (
+                        <img src={p.photo} alt={p.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      ) : (
+                        <User className="w-5 h-5 text-natural-muted/60" />
+                      )}
                     </div>
                     <div className="min-w-0">
                       <p className="font-black text-sm text-natural-heading leading-tight truncate">{p.name}</p>
@@ -5398,6 +5409,10 @@ const AuthScreen = ({ onAuthSuccess, t, lang }: { onAuthSuccess: (user: Firebase
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [demoPassword, setDemoPassword] = useState('');
+  const [showDemoPassword, setShowDemoPassword] = useState(false);
+  const [demoProvisioning, setDemoProvisioning] = useState(false);
+  const [demoLoggingInRole, setDemoLoggingInRole] = useState<'worker' | 'client' | null>(null);
 
   // Estados específicos para Recuperação de Palavra-passe Oficial (mozbiscates@gmail.com)
   const [recoveryStep, setRecoveryStep] = useState<'email' | 'code' | 'password' | 'success'>('email');
@@ -5458,18 +5473,16 @@ const AuthScreen = ({ onAuthSuccess, t, lang }: { onAuthSuccess: (user: Firebase
 
     try {
       if (mode === 'login') {
-        const res = await signInWithEmailAndPassword(auth, email, password);
+        const res = await signInWithEmailAndPassword(auth, email.trim(), password);
         onAuthSuccess(res.user);
       } else if (mode === 'register') {
-        const res = await createUserWithEmailAndPassword(auth, email, password);
+        const res = await createUserWithEmailAndPassword(auth, email.trim(), password);
         const normalizedPhone = normalizeMozPhone(cleanPhone(phone));
-        await setDoc(doc(db, 'users', res.user.uid), {
-          uid: res.user.uid,
-          email: res.user.email,
-          phone: normalizedPhone,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        }, { merge: true }).catch((err) => console.warn('User profile initial phone notice:', err));
+        try {
+          sessionStorage.setItem('mozbiscates_pending_phone', normalizedPhone);
+        } catch (storageErr) {
+          console.warn('User profile pending phone notice:', storageErr);
+        }
         onAuthSuccess(res.user);
       }
     } catch (err: any) {
@@ -5480,6 +5493,56 @@ const AuthScreen = ({ onAuthSuccess, t, lang }: { onAuthSuccess: (user: Firebase
       setError(t.authError + ' (' + msg + ')');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleProvisionDemoAccounts = async () => {
+    setError('');
+    setMessage('');
+    const pass = demoPassword.trim();
+    if (pass.length < 6) {
+      setError('Defina uma palavra-passe demo com pelo menos 6 caracteres para ativar as duas contas.');
+      return;
+    }
+
+    setDemoProvisioning(true);
+    try {
+      await provisionDemoAccount(DEMO_ACCOUNTS.worker.email, pass, DEMO_ACCOUNTS.worker);
+      await provisionDemoAccount(DEMO_ACCOUNTS.client.email, pass, DEMO_ACCOUNTS.client);
+      setPassword(pass);
+      setMessage('Contas demo criadas/atualizadas! Escolha Biscateiro ou Cliente abaixo para entrar.');
+    } catch (err: any) {
+      setError(err?.message || 'Não foi possível criar/atualizar as contas demo.');
+    } finally {
+      setDemoProvisioning(false);
+    }
+  };
+
+  const handleQuickDemoLogin = async (targetRole: 'worker' | 'client') => {
+    const targetConfig = targetRole === 'worker' ? DEMO_ACCOUNTS.worker : DEMO_ACCOUNTS.client;
+    setError('');
+    setMessage('');
+    setEmail(targetConfig.email);
+
+    const activePass = (demoPassword || password).trim();
+    if (activePass.length < 6) {
+      setMessage(`E-mail ${targetConfig.email} preenchido. Introduza a palavra-passe acima para entrar.`);
+      return;
+    }
+
+    setPassword(activePass);
+    setDemoLoggingInRole(targetRole);
+    try {
+      const res = await signInWithEmailAndPassword(auth, targetConfig.email, activePass);
+      onAuthSuccess(res.user);
+    } catch (err: any) {
+      if (err?.code === 'auth/user-not-found' || err?.code === 'auth/invalid-credential') {
+        setError('Conta demo ainda não ativada ou palavra-passe incorreta. Clique primeiro em "Criar / Ativar 2 Contas Demo".');
+      } else {
+        setError(err?.message || 'Erro ao entrar na conta demo.');
+      }
+    } finally {
+      setDemoLoggingInRole(null);
     }
   };
 
@@ -6035,6 +6098,90 @@ const AuthScreen = ({ onAuthSuccess, t, lang }: { onAuthSuccess: (user: Firebase
           )}
         </div>
 
+        {/* MODO APRESENTAÇÃO — CONTAS DEMO */}
+        {mode === 'login' && (
+          <div className="mt-6 bg-white border-2 border-natural-line rounded-3xl p-5 shadow-sm space-y-3.5 text-left">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h2 className="text-xs font-black uppercase tracking-wider text-natural-heading flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-natural-accent shrink-0" />
+                  <span>Contas Demo (Apresentação)</span>
+                </h2>
+                <p className="text-[11px] text-natural-muted font-semibold mt-0.5 leading-snug">
+                  Ative e aceda rapidamente às contas de demonstração com uma palavra-passe definida por si.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-1.5 text-[11px] bg-natural-surface/70 p-3 rounded-2xl border border-natural-line/70">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-black text-natural-accent uppercase text-[10px]">Biscateiro</span>
+                <span className="font-mono font-bold text-natural-heading truncate">{DEMO_ACCOUNTS.worker.email}</span>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-black text-emerald-700 uppercase text-[10px]">Cliente</span>
+                <span className="font-mono font-bold text-natural-heading truncate">{DEMO_ACCOUNTS.client.email}</span>
+              </div>
+            </div>
+
+            <div className="relative">
+              <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-natural-muted" />
+              <input
+                type={showDemoPassword ? 'text' : 'password'}
+                placeholder="Palavra-passe demo (mín. 6 caracteres)"
+                value={demoPassword}
+                onChange={(e) => setDemoPassword(e.target.value)}
+                className="w-full pl-10 pr-10 py-3 bg-natural-bg/60 border border-natural-line rounded-2xl outline-none focus:border-natural-accent text-xs font-bold text-natural-heading"
+              />
+              <button
+                type="button"
+                onClick={() => setShowDemoPassword((v) => !v)}
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-natural-muted hover:text-natural-heading"
+                aria-label="Mostrar ou ocultar palavra-passe demo"
+              >
+                {showDemoPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleProvisionDemoAccounts}
+              disabled={demoProvisioning || loading || demoLoggingInRole !== null}
+              className="w-full min-h-[44px] bg-natural-heading text-white font-black py-3 px-4 rounded-2xl text-[11px] uppercase tracking-wider flex items-center justify-center gap-2 hover:opacity-95 active:scale-[0.99] transition-all disabled:opacity-50"
+            >
+              {demoProvisioning ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>A preparar contas demo...</span>
+                </>
+              ) : (
+                <span>Criar / Ativar 2 Contas Demo</span>
+              )}
+            </button>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => handleQuickDemoLogin('worker')}
+                disabled={demoProvisioning || loading || demoLoggingInRole !== null}
+                className="min-h-[44px] py-2.5 px-3 bg-orange-50 border border-orange-200 text-natural-accent rounded-2xl text-[10px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 hover:bg-orange-100 transition-colors disabled:opacity-50"
+              >
+                {demoLoggingInRole === 'worker' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wrench className="w-3.5 h-3.5 shrink-0" />}
+                <span>Entrar Biscateiro</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleQuickDemoLogin('client')}
+                disabled={demoProvisioning || loading || demoLoggingInRole !== null}
+                className="min-h-[44px] py-2.5 px-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl text-[10px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 hover:bg-emerald-100 transition-colors disabled:opacity-50"
+              >
+                {demoLoggingInRole === 'client' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <User className="w-3.5 h-3.5 shrink-0" />}
+                <span>Entrar Cliente</span>
+              </button>
+            </div>
+          </div>
+        )}
+
       </div>
     </div>
   );
@@ -6230,7 +6377,8 @@ const RoleSelection = ({ onSelect, onBack, lang, setLang, t, currentUser, isAdmi
   );
 };
 
-const WorkerProfileForm = ({ onSave, t, initialPhone, initialData, isManager = false }: { onSave: (data: { name: string, phone: string, category: string, photo: string, biPhoto: string, biSelfie: string, verified: boolean, portfolio: string[], nuit?: string, emergencyContactName?: string, emergencyContactPhone?: string, specialty?: string }) => void, t: any, initialPhone?: string, initialData?: any, isManager?: boolean }) => {
+const WorkerProfileForm = ({ onSave, t, initialPhone, initialData, isManager = false, isDemoAccount = false }: { onSave: (data: { name: string, phone: string, category: string, photo: string, biPhoto: string, biSelfie: string, verified: boolean, portfolio: string[], nuit?: string, emergencyContactName?: string, emergencyContactPhone?: string, specialty?: string }) => void, t: any, initialPhone?: string, initialData?: any, isManager?: boolean, isDemoAccount?: boolean }) => {
+  const biExempt = isManager || isDemoAccount;
   const [name, setName] = useState(initialData?.fullName || '');
   const [phone, setPhone] = useState(initialPhone || initialData?.phone || '');
   const [category, setCategory] = useState(initialData?.category || 'Electricista Profissional');
@@ -6293,22 +6441,22 @@ const WorkerProfileForm = ({ onSave, t, initialPhone, initialData, isManager = f
       return;
     }
 
-    // BI é obrigatório para todos, excepto gerentes
-    if (!isManager && (!biPhoto || !biSelfie)) {
+    // BI é obrigatório para todos, excepto gerentes e contas demo de apresentação
+    if (!biExempt && (!biPhoto || !biSelfie)) {
       setError('A foto do Bilhete de Identidade (BI) e a Selfie correspondente são obrigatórias para auditoria e segurança de prestadores (dispensadas apenas para gerentes).');
       return;
     }
 
-    // Se for gerente e não forneceu BI/Selfie, regista de imediato sem bloquear
-    if (isManager && (!biPhoto || !biSelfie)) {
+    // Se for gerente ou conta demo e não forneceu BI/Selfie, regista de imediato sem bloquear
+    if (biExempt && (!biPhoto || !biSelfie)) {
       onSave({ 
-        name: name.trim() || 'Gerente Mozbiscates', 
+        name: name.trim() || (isDemoAccount ? 'Panda Vlogs (Biscateiro Demo)' : 'Gerente Mozbiscates'), 
         phone: normalizeMozPhone(cleaned),
         category, 
         photo: photo || '', 
         biPhoto: biPhoto || '', 
         biSelfie: biSelfie || '', 
-        verified: true,
+        verified: isManager,
         portfolio,
         nuit: nuit.trim() || undefined,
         emergencyContactName: emergencyContactName.trim() || undefined,
@@ -6551,20 +6699,26 @@ const WorkerProfileForm = ({ onSave, t, initialPhone, initialData, isManager = f
         </div>
 
         {/* Verification Section */}
-        <div className={`p-6 rounded-[2rem] border-2 border-dashed ${isManager ? 'bg-emerald-50/70 border-emerald-300' : 'bg-amber-50 border-amber-200'}`}>
+        <div className={`p-6 rounded-[2rem] border-2 border-dashed ${biExempt ? 'bg-emerald-50/70 border-emerald-300' : 'bg-amber-50 border-amber-200'}`}>
           <div className="flex items-center justify-between mb-3">
-            <p className={`text-[10px] font-black uppercase tracking-widest italic flex items-center gap-2 ${isManager ? 'text-emerald-900' : 'text-amber-900'}`}>
-              <Lock className="w-4 h-4" /> Segurança: Verificação de BI {!isManager ? 'Obrigatória' : '(Dispensada para Gerência)'}
+            <p className={`text-[10px] font-black uppercase tracking-widest italic flex items-center gap-2 ${biExempt ? 'text-emerald-900' : 'text-amber-900'}`}>
+              <Lock className="w-4 h-4" /> Segurança: Verificação de BI {isManager ? '(Dispensada para Gerência)' : isDemoAccount ? '(Dispensada para Conta Demo)' : 'Obrigatória'}
             </p>
-            {isManager && (
+            {isManager ? (
               <span className="text-[8px] font-black uppercase bg-emerald-600 text-white px-2 py-0.5 rounded-full">
                 👑 Gerência
               </span>
-            )}
+            ) : isDemoAccount ? (
+              <span className="text-[8px] font-black uppercase bg-emerald-600 text-white px-2 py-0.5 rounded-full">
+                Conta Demo
+              </span>
+            ) : null}
           </div>
-          {isManager && (
+          {biExempt && (
             <p className="text-[10px] text-emerald-800 font-bold mb-3 leading-tight">
-              Conta de Gerência reconhecida: Envio de BI e Selfie é opcional para administradores e gerentes.
+              {isDemoAccount
+                ? 'Conta Demo reconhecida: envio de BI e Selfie dispensado para apresentação.'
+                : 'Conta de Gerência reconhecida: Envio de BI e Selfie é opcional para administradores e gerentes.'}
             </p>
           )}
           <div className="grid grid-cols-2 gap-4">
@@ -6635,7 +6789,7 @@ const WorkerProfileForm = ({ onSave, t, initialPhone, initialData, isManager = f
 
         <button 
           onClick={handleFinalize} 
-          disabled={!name || !phone.trim() || (!isManager && (!biPhoto || !biSelfie)) || isValidating || isCompressing}
+          disabled={!name || !phone.trim() || (!biExempt && (!biPhoto || !biSelfie)) || isValidating || isCompressing}
           className="w-full bg-natural-accent text-white font-black py-5 rounded-[2rem] shadow-xl shadow-natural-accent/30 text-lg uppercase tracking-widest mt-4 active:scale-95 transition-transform disabled:opacity-50 flex items-center justify-center gap-3"
         >
           {isValidating || isCompressing ? (
@@ -6691,8 +6845,12 @@ const ProviderCard = memo(({ provider, onSelect, userPos }: { provider: Provider
       </div>
       <div className="flex gap-5">
         <div className="relative">
-          <div className="w-20 h-20 rounded-[1.5rem] bg-natural-surface overflow-hidden flex-shrink-0 border-2 border-white shadow-inner">
-            <img src={provider.photo} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+          <div className="w-20 h-20 rounded-[1.5rem] bg-natural-surface overflow-hidden flex-shrink-0 border-2 border-white shadow-inner flex items-center justify-center">
+            {provider.photo ? (
+              <img src={provider.photo} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+            ) : (
+              <User className="w-8 h-8 text-natural-muted/50" />
+            )}
           </div>
           {provider.verified && (
             <div className="absolute -right-2 -bottom-2 bg-natural-success text-white p-1.5 rounded-full border-2 border-white shadow-accent-glow">
@@ -7446,15 +7604,98 @@ function MainApp() {
             getDoc(secDocRef).catch(() => null)
           ]);
 
+          const normalizedEmail = (user.email || '').trim().toLowerCase();
           const isAdmin = (
-            user.email === 'fushawshaw@gmail.com' || 
-            user.email === 'wanderj419@gmail.com' || 
-            user.email === 'mozbiscates@gmail.com'
+            normalizedEmail === 'fushawshaw@gmail.com' || 
+            normalizedEmail === 'wanderj419@gmail.com' || 
+            normalizedEmail === 'mozbiscates@gmail.com'
           );
+          const demoConfig = getDemoAccountConfig(normalizedEmail);
           
           let secData = secDoc && secDoc.exists() ? secDoc.data() : null;
 
-          if (userDoc.exists()) {
+          if (demoConfig) {
+            const existing = userDoc.exists() ? userDoc.data() : null;
+            const needsDemoBootstrap =
+              !existing ||
+              existing.role !== demoConfig.role ||
+              !existing.phone ||
+              !existing.fullName ||
+              (demoConfig.role === 'worker' && !existing.category);
+
+            let resolvedData = existing || {};
+            if (needsDemoBootstrap) {
+              if (!existing) {
+                const createPayload: any = {
+                  uid: user.uid,
+                  email: user.email || demoConfig.email,
+                  role: demoConfig.role,
+                  fullName: demoConfig.fullName,
+                  phone: demoConfig.phone,
+                  city: demoConfig.city,
+                  bairro: demoConfig.bairro,
+                  ...(demoConfig.role === 'worker'
+                    ? {
+                        category: demoConfig.category,
+                        specialty: demoConfig.specialty,
+                        specialties: demoConfig.specialties,
+                        level: demoConfig.level,
+                        jobs: demoConfig.jobs,
+                        rating: demoConfig.rating
+                      }
+                    : {}),
+                  photo: '',
+                  balance: 0,
+                  verified: false,
+                  createdAt: serverTimestamp(),
+                  updatedAt: serverTimestamp(),
+                  lastActiveAt: serverTimestamp()
+                };
+                await setDoc(userDocRef, createPayload);
+                resolvedData = {
+                  ...createPayload,
+                  createdAt: new Date(),
+                  updatedAt: new Date(),
+                  lastActiveAt: new Date()
+                };
+              } else {
+                const updatePayload: any = {
+                  role: demoConfig.role,
+                  fullName: existing.fullName || demoConfig.fullName,
+                  phone: existing.phone || demoConfig.phone,
+                  city: existing.city || demoConfig.city,
+                  bairro: existing.bairro || demoConfig.bairro,
+                  ...(demoConfig.role === 'worker'
+                    ? {
+                        category: existing.category || demoConfig.category,
+                        specialty: existing.specialty || demoConfig.specialty,
+                        specialties: existing.specialties || demoConfig.specialties
+                      }
+                    : {}),
+                  updatedAt: serverTimestamp(),
+                  lastActiveAt: serverTimestamp()
+                };
+                await updateDoc(userDocRef, updatePayload);
+                resolvedData = {
+                  ...existing,
+                  ...updatePayload,
+                  updatedAt: new Date(),
+                  lastActiveAt: new Date()
+                };
+              }
+            }
+
+            if (!secData) {
+              const initSec = { userId: user.uid, updatedAt: serverTimestamp() };
+              await setDoc(secDocRef, initSec, { merge: true }).catch(() => {});
+              secData = { userId: user.uid };
+            }
+
+            setSecurityData(secData);
+            setUserData(resolvedData);
+            setRole(demoConfig.role);
+            setView('app');
+          } else if (userDoc.exists()) {
             const data = userDoc.data();
 
             // Background seamless migration: if old user has PII in root doc, isolate it in private_profile
@@ -7490,7 +7731,7 @@ function MainApp() {
               setRole('admin');
               setView('app');
               if (data.role !== 'admin') {
-                await updateDoc(userDocRef, { role: 'admin' }).catch(() => {});
+                await updateDoc(userDocRef, { role: 'admin', updatedAt: serverTimestamp(), lastActiveAt: serverTimestamp() }).catch(() => {});
               }
             } else if (data.role) {
               setRole(data.role);
@@ -7571,13 +7812,34 @@ function MainApp() {
       Notification.requestPermission().then(perm => setNotifPermission(perm)).catch(() => {});
     }
     try {
-      await setDoc(doc(db, 'users', currentUser.uid), {
-        uid: currentUser.uid,
-        email: currentUser.email,
-        role: r,
-        updatedAt: serverTimestamp(),
-        lastActiveAt: serverTimestamp()
-      }, { merge: true });
+      let pendingPhone = '';
+      try {
+        pendingPhone = sessionStorage.getItem('mozbiscates_pending_phone') || '';
+        sessionStorage.removeItem('mozbiscates_pending_phone');
+      } catch (storageErr) {}
+
+      const userRef = doc(db, 'users', currentUser.uid);
+      const snap = await getDoc(userRef);
+      if (!snap.exists()) {
+        await setDoc(userRef, {
+          uid: currentUser.uid,
+          email: currentUser.email,
+          role: r,
+          ...(pendingPhone ? { phone: pendingPhone } : {}),
+          balance: 0,
+          verified: false,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          lastActiveAt: serverTimestamp()
+        });
+      } else {
+        await updateDoc(userRef, {
+          role: r,
+          ...(pendingPhone ? { phone: pendingPhone } : {}),
+          updatedAt: serverTimestamp(),
+          lastActiveAt: serverTimestamp()
+        });
+      }
       setView('app');
     } catch (err) {
       setView('app'); // Fallback to app even if save fails (for demo)
@@ -7695,7 +7957,19 @@ function MainApp() {
     if (!currentUser || role !== 'client') return;
     const q = query(collection(db, 'users'), where('role', '==', 'worker'), limit(100));
     const unsubscribe = onSnapshot(q, (snap) => {
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as any));
+      const data = snap.docs.map(d => {
+        const docData = d.data() as any;
+        return {
+          id: d.id,
+          ...docData,
+          name: docData.name || docData.fullName || 'Prestador Mozbiscates',
+          photo: docData.photo || '',
+          bairro: docData.bairro || 'Maputo',
+          rating: typeof docData.rating === 'number' ? docData.rating : 5.0,
+          jobs: typeof docData.jobs === 'number' ? docData.jobs : 0,
+          level: typeof docData.level === 'number' ? docData.level : 1
+        };
+      });
       setRawProviders(data);
 
       // Check document changes for newly added or newly verified workers
@@ -8369,7 +8643,7 @@ function MainApp() {
     return <RoleSelection onSelect={handleRoleSelection} onBack={() => setView('landing')} lang={lang} setLang={setLang} t={t} currentUser={currentUser} isAdminEmail={isAdminEmail} />;
   }
 
-  // Identificação do perfil de Gerente / Administrador
+  // Identificação do perfil de Gerente / Administrador e Contas Demo de Apresentação
   const isManager = Boolean(
     role === 'admin' ||
     userData?.role === 'admin' ||
@@ -8378,6 +8652,8 @@ function MainApp() {
     currentUser?.email === 'wanderj419@gmail.com' ||
     currentUser?.email === 'mozbiscates@gmail.com'
   );
+  const isDemoAccount = isDemoPresentationEmail(currentUser?.email);
+  const canBypassBi = isManager || isDemoAccount;
 
   // From here on, view === 'app' and role is defined
   if (role === 'worker' && !userData?.category) {
@@ -8387,16 +8663,16 @@ function MainApp() {
           <h1 className="font-black italic text-xl">Mozbiscates</h1>
           <button onClick={handleLogout} className="text-natural-muted font-black text-[10px] uppercase">{t.logout || 'Sair'}</button>
         </header>
-        <WorkerProfileForm onSave={handleCreateProfile} t={t} initialPhone={userData?.phone || ''} isManager={isManager} />
+        <WorkerProfileForm onSave={handleCreateProfile} t={t} initialPhone={userData?.phone || ''} isManager={isManager} isDemoAccount={isDemoAccount} />
       </div>
     );
   }
 
-  // Cadastro Obrigatório de Segurança e Contacto para Clientes (BI obrigatório excepto para gerentes)
+  // Cadastro Obrigatório de Segurança e Contacto para Clientes (BI obrigatório excepto para gerentes e contas demo)
   const clientNeedsSecuritySetup = role === 'client' && (
     !combinedUserData?.phone ||
     !isValidMozPhone(cleanPhone(combinedUserData?.phone)) ||
-    (!isManager && !combinedUserData?.biPhoto)
+    (!canBypassBi && !combinedUserData?.biPhoto)
   );
 
   if (clientNeedsSecuritySetup) {
@@ -8411,6 +8687,7 @@ function MainApp() {
           onSave={handleCreateClientProfile}
           isMandatory={true}
           isManager={isManager}
+          isDemoAccount={isDemoAccount}
         />
       </div>
     );
@@ -8440,6 +8717,7 @@ function MainApp() {
           onCancel={() => setShowClientProfileModal(false)}
           isMandatory={false}
           isManager={isManager}
+          isDemoAccount={isDemoAccount}
         />
       )}
 
@@ -8743,9 +9021,6 @@ function MainApp() {
           <button onClick={() => { setTab('jobs'); if(role === 'admin') setAdminView('active'); }} className={`text-[12px] font-black uppercase tracking-[0.15em] transition-all whitespace-nowrap pb-3 border-b-4 ${tab === 'jobs' && (role !== 'admin' || adminView === 'active') ? 'text-natural-heading border-natural-accent' : 'text-natural-muted border-transparent opacity-30'}`}>
             BISCATES
           </button>
-          <button onClick={() => setTab('profile')} className={`text-[12px] font-black uppercase tracking-[0.15em] transition-all whitespace-nowrap pb-3 border-b-4 ${tab === 'profile' ? 'text-natural-heading border-natural-accent' : 'text-natural-muted border-transparent opacity-30'}`}>
-            {t.profile || 'PERFIL'}
-          </button>
           {role === 'admin' && (
             <>
               <button onClick={() => { setTab('jobs'); setAdminView('history'); }} className={`text-[12px] font-black uppercase tracking-[0.15em] transition-all whitespace-nowrap pb-3 border-b-4 ${tab === 'jobs' && adminView === 'history' ? 'text-natural-heading border-natural-accent' : 'text-natural-muted border-transparent opacity-30'}`}>
@@ -8768,6 +9043,7 @@ function MainApp() {
             userData={combinedUserData}
             role={role}
             isManager={isManager}
+            isDemoAccount={isDemoAccount}
             balance={balance}
             jobsCount={jobs.length}
             lang={lang}
@@ -8953,7 +9229,7 @@ function MainApp() {
                  </div>
                </div>
              ) : (
-               <WorkerProfileForm onSave={handleCreateProfile} t={t} initialPhone={userData?.phone || ''} initialData={combinedUserData} isManager={isManager} />
+               <WorkerProfileForm onSave={handleCreateProfile} t={t} initialPhone={userData?.phone || ''} initialData={combinedUserData} isManager={isManager} isDemoAccount={isDemoAccount} />
              )}
           </div>
         ) : (
@@ -9250,8 +9526,12 @@ function MainApp() {
               <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 20, stiffness: 150 }} className="fixed bottom-0 left-0 right-0 bg-natural-bg rounded-t-[3.5rem] z-[70] px-8 pt-10 pb-12 shadow-2xl max-w-md mx-auto overflow-y-auto max-h-[90vh]">
                 <div className="flex gap-6 mb-8">
                   <div className="relative">
-                    <div className="w-24 h-24 rounded-[2rem] bg-white overflow-hidden border-2 border-natural-line shadow-md">
-                      <img src={selectedProvider.photo} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                    <div className="w-24 h-24 rounded-[2rem] bg-white overflow-hidden border-2 border-natural-line shadow-md flex items-center justify-center">
+                      {selectedProvider.photo ? (
+                        <img src={selectedProvider.photo} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      ) : (
+                        <User className="w-10 h-10 text-natural-muted/50" />
+                      )}
                     </div>
                     {selectedProvider.verified && (
                       <div className="absolute -right-2 -bottom-2 bg-natural-success text-white p-1.5 rounded-full border-2 border-white shadow-lg">

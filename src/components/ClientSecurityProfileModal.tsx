@@ -20,6 +20,7 @@ interface ClientSecurityProfileModalProps {
   onCancel?: () => void;
   isMandatory?: boolean;
   isManager?: boolean;
+  isDemoAccount?: boolean;
 }
 
 export const ClientSecurityProfileModal: React.FC<ClientSecurityProfileModalProps> = ({
@@ -27,8 +28,10 @@ export const ClientSecurityProfileModal: React.FC<ClientSecurityProfileModalProp
   onSave,
   onCancel,
   isMandatory = false,
-  isManager = false
+  isManager = false,
+  isDemoAccount = false
 }) => {
+  const biExempt = isManager || isDemoAccount;
   const [fullName, setFullName] = useState(initialData?.fullName || '');
   const [phone, setPhone] = useState(initialData?.phone || '');
   const [bairro, setBairro] = useState(initialData?.bairro || 'Polana Caniço');
@@ -68,8 +71,8 @@ export const ClientSecurityProfileModal: React.FC<ClientSecurityProfileModalProp
       return;
     }
 
-    // BI é obrigatório para todos os utilizadores, excepto para os gerentes
-    if (!isManager && !biPhoto) {
+    // BI é obrigatório para todos os utilizadores, excepto para os gerentes e contas demo de apresentação
+    if (!biExempt && !biPhoto) {
       setError('A foto do Bilhete de Identidade (BI) é obrigatória para segurança e validação da conta (dispensada apenas para gerentes).');
       return;
     }
@@ -146,32 +149,32 @@ export const ClientSecurityProfileModal: React.FC<ClientSecurityProfileModalProp
               <span className="text-[9px] text-natural-muted text-center mt-0.5">Rosto nítido (opcional)</span>
             </div>
 
-            {/* Foto do BI (Obrigatória para todos, excepto gerentes) */}
-            <div className={`flex flex-col items-center p-3.5 rounded-2xl ${isManager ? 'bg-emerald-50/60 border border-emerald-200' : 'bg-amber-50/60 border border-amber-200'}`}>
+            {/* Foto do BI (Obrigatória para todos, excepto gerentes/demo) */}
+            <div className={`flex flex-col items-center p-3.5 rounded-2xl ${biExempt ? 'bg-emerald-50/60 border border-emerald-200' : 'bg-amber-50/60 border border-amber-200'}`}>
               <label className="relative cursor-pointer group w-full">
-                <div className={`w-full h-20 rounded-xl bg-white border-2 border-dashed overflow-hidden flex flex-col items-center justify-center relative ${isManager ? 'border-emerald-300' : 'border-amber-300'}`}>
+                <div className={`w-full h-20 rounded-xl bg-white border-2 border-dashed overflow-hidden flex flex-col items-center justify-center relative ${biExempt ? 'border-emerald-300' : 'border-amber-300'}`}>
                   {biPhoto ? (
                     <img src={biPhoto} alt="Foto BI" className="w-full h-full object-cover" />
                   ) : (
                     <>
-                      <Lock className={`w-5 h-5 mb-1 ${isManager ? 'text-emerald-600' : 'text-amber-600'}`} />
-                      <span className={`text-[9px] font-black uppercase tracking-wider ${isManager ? 'text-emerald-800' : 'text-amber-800'}`}>
-                        {isManager ? 'Foto do BI (Dispensado)' : 'Foto do BI (Obrigatória) *'}
+                      <Lock className={`w-5 h-5 mb-1 ${biExempt ? 'text-emerald-600' : 'text-amber-600'}`} />
+                      <span className={`text-[9px] font-black uppercase tracking-wider ${biExempt ? 'text-emerald-800' : 'text-amber-800'}`}>
+                        {biExempt ? 'Foto do BI (Dispensado)' : 'Foto do BI (Obrigatória) *'}
                       </span>
                     </>
                   )}
-                  <div className={`absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity ${isManager ? 'bg-emerald-600/30' : 'bg-amber-600/30'}`}>
+                  <div className={`absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity ${biExempt ? 'bg-emerald-600/30' : 'bg-amber-600/30'}`}>
                     <Camera className="w-5 h-5 text-white" />
                   </div>
                 </div>
                 <input type="file" className="hidden" accept="image/*" capture="environment" onChange={handleImageUpload(setBiPhoto)} />
               </label>
-              <span className={`text-[11px] font-bold mt-2 flex items-center gap-1 ${isManager ? 'text-emerald-900' : 'text-amber-900'}`}>
+              <span className={`text-[11px] font-bold mt-2 flex items-center gap-1 ${biExempt ? 'text-emerald-900' : 'text-amber-900'}`}>
                 {biPhoto ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 inline" /> : null}
                 Bilhete de Identidade (BI)
               </span>
-              <span className={`text-[9px] text-center mt-0.5 ${isManager ? 'text-emerald-700 font-semibold' : 'text-amber-700'}`}>
-                {isManager ? 'Dispensado para Gerentes (Opcional)' : 'Obrigatório: Foto nítida da frente do BI/DIRE'}
+              <span className={`text-[9px] text-center mt-0.5 ${biExempt ? 'text-emerald-700 font-semibold' : 'text-amber-700'}`}>
+                {isDemoAccount ? 'Dispensado para Conta Demo (Apresentação)' : isManager ? 'Dispensado para Gerentes (Opcional)' : 'Obrigatório: Foto nítida da frente do BI/DIRE'}
               </span>
             </div>
           </div>

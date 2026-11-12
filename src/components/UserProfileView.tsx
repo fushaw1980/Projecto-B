@@ -57,6 +57,7 @@ interface UserProfileViewProps {
   userData: any;
   role: 'client' | 'worker' | 'admin' | null;
   isManager: boolean;
+  isDemoAccount?: boolean;
   balance: number;
   jobsCount: number;
   lang: 'pt' | 'en' | 'em';
@@ -86,6 +87,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
   userData,
   role,
   isManager,
+  isDemoAccount = false,
   balance,
   jobsCount,
   lang,
@@ -95,6 +97,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
   onSwitchRole,
   onLogout
 }) => {
+  const biExempt = isManager || isDemoAccount;
   const [isEditing, setIsEditing] = useState(false);
   const [showPrivateDocs, setShowPrivateDocs] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -208,7 +211,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
       return;
     }
 
-    if (!isManager && !biPhoto) {
+    if (!biExempt && !biPhoto) {
       setError('O Bilhete de Identidade (BI) é obrigatório para contas de clientes e biscateiros (dispensado apenas para gerentes).');
       return;
     }
@@ -263,9 +266,13 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
     ? userData?.biPhoto
       ? 'BI Registado · Gerência'
       : 'Dispensado (Gerência)'
-    : userData?.biPhoto
-      ? 'BI Verificado'
-      : 'BI Pendente (Obrigatório)';
+    : isDemoAccount
+      ? userData?.biPhoto
+        ? 'BI Registado · Conta Demo'
+        : 'Dispensado (Conta Demo)'
+      : userData?.biPhoto
+        ? 'BI Verificado'
+        : 'BI Pendente (Obrigatório)';
 
   return (
     <main className="flex-1 px-5 pt-4 pb-32 space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
@@ -310,7 +317,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-semibold text-natural-muted mt-1">
               <span className="text-natural-heading font-bold">{roleLabel}</span>
               <span aria-hidden="true">·</span>
-              <span className={userData?.biPhoto || isManager ? 'text-emerald-700 font-bold' : 'text-amber-700 font-bold'}>
+              <span className={userData?.biPhoto || biExempt ? 'text-emerald-700 font-bold' : 'text-amber-700 font-bold'}>
                 {biStatusLabel}
               </span>
               {memberSince && (
@@ -367,8 +374,8 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
                 </p>
               </div>
               <div className="text-center">
-                <p className={`text-sm font-black ${userData?.biPhoto || isManager ? 'text-emerald-700' : 'text-amber-700'}`}>
-                  {isManager ? 'Gerente' : userData?.biPhoto ? 'Auditado' : 'Em falta'}
+                <p className={`text-sm font-black ${userData?.biPhoto || biExempt ? 'text-emerald-700' : 'text-amber-700'}`}>
+                  {isManager ? 'Gerente' : isDemoAccount ? 'Conta Demo' : userData?.biPhoto ? 'Auditado' : 'Em falta'}
                 </p>
                 <p className="text-[10px] font-bold text-natural-muted uppercase tracking-wider mt-0.5">
                   Segurança
@@ -701,8 +708,8 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
           <div className="space-y-3">
             <div className="flex items-center justify-between text-xs">
               <span className="font-bold text-natural-heading">Bilhete de Identidade (BI)</span>
-              <span className={`font-bold ${isManager || biPhoto ? 'text-emerald-700' : 'text-amber-700'}`}>
-                {isManager ? 'Dispensado para Gerência' : biPhoto ? 'Carregado' : 'Obrigatório'}
+              <span className={`font-bold ${biExempt || biPhoto ? 'text-emerald-700' : 'text-amber-700'}`}>
+                {isManager ? 'Dispensado para Gerência' : isDemoAccount ? 'Dispensado para Conta Demo' : biPhoto ? 'Carregado' : 'Obrigatório'}
               </span>
             </div>
 
@@ -719,7 +726,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
                           <>
                             <Lock className="w-5 h-5 text-natural-muted mb-1" />
                             <span className="text-[10px] font-bold text-natural-muted">
-                              {isManager ? 'Carregar BI (Opcional)' : 'Carregar BI *'}
+                              {biExempt ? 'Carregar BI (Opcional)' : 'Carregar BI *'}
                             </span>
                           </>
                         )}
@@ -733,7 +740,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
                     <img src={biPhoto} alt="Bilhete de Identidade" className="w-full h-32 object-cover rounded-2xl border border-natural-line" />
                   ) : (
                     <div className="h-24 bg-natural-surface rounded-2xl border border-natural-line flex items-center justify-center text-xs text-natural-muted font-semibold">
-                      {isManager ? 'Dispensado para Gerência' : 'BI ainda não enviado'}
+                      {isManager ? 'Dispensado para Gerência' : isDemoAccount ? 'Dispensado para Conta Demo' : 'BI ainda não enviado'}
                     </div>
                   )}
                 </div>
