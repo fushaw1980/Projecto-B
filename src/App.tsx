@@ -87,6 +87,7 @@ import { ClientSecurityProfileModal } from './components/ClientSecurityProfileMo
 import { EmergencyModal } from './components/EmergencyModal';
 import { AdminEmergencyMonitor } from './components/AdminEmergencyMonitor';
 import { MandatoryWhatsAppModal } from './components/MandatoryWhatsAppModal';
+import { UserProfileView, ProfileUpdatePayload } from './components/UserProfileView';
 import { 
   getWhatsAppUrl, 
   isValidMozPhone, 
@@ -6229,18 +6230,18 @@ const RoleSelection = ({ onSelect, onBack, lang, setLang, t, currentUser, isAdmi
   );
 };
 
-const WorkerProfileForm = ({ onSave, t, initialPhone, isManager = false }: { onSave: (data: { name: string, phone: string, category: string, photo: string, biPhoto: string, biSelfie: string, verified: boolean, portfolio: string[], nuit?: string, emergencyContactName?: string, emergencyContactPhone?: string, specialty?: string }) => void, t: any, initialPhone?: string, isManager?: boolean }) => {
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState(initialPhone || '');
-  const [category, setCategory] = useState('Electricista Profissional');
-  const [nuit, setNuit] = useState('');
-  const [emergencyContactName, setEmergencyContactName] = useState('');
-  const [emergencyContactPhone, setEmergencyContactPhone] = useState('');
+const WorkerProfileForm = ({ onSave, t, initialPhone, initialData, isManager = false }: { onSave: (data: { name: string, phone: string, category: string, photo: string, biPhoto: string, biSelfie: string, verified: boolean, portfolio: string[], nuit?: string, emergencyContactName?: string, emergencyContactPhone?: string, specialty?: string }) => void, t: any, initialPhone?: string, initialData?: any, isManager?: boolean }) => {
+  const [name, setName] = useState(initialData?.fullName || '');
+  const [phone, setPhone] = useState(initialPhone || initialData?.phone || '');
+  const [category, setCategory] = useState(initialData?.category || 'Electricista Profissional');
+  const [nuit, setNuit] = useState(initialData?.nuit || '');
+  const [emergencyContactName, setEmergencyContactName] = useState(initialData?.emergencyContactName || '');
+  const [emergencyContactPhone, setEmergencyContactPhone] = useState(initialData?.emergencyContactPhone || '');
   const [specialtySearch, setSpecialtySearch] = useState('');
-  const [photo, setPhoto] = useState<string | null>(null);
-  const [biPhoto, setBiPhoto] = useState<string | null>(null);
-  const [biSelfie, setBiSelfie] = useState<string | null>(null);
-  const [portfolio, setPortfolio] = useState<string[]>([]);
+  const [photo, setPhoto] = useState<string | null>(initialData?.photo || null);
+  const [biPhoto, setBiPhoto] = useState<string | null>(initialData?.biPhoto || null);
+  const [biSelfie, setBiSelfie] = useState<string | null>(initialData?.biSelfie || null);
+  const [portfolio, setPortfolio] = useState<string[]>(Array.isArray(initialData?.portfolio) ? initialData.portfolio : []);
   const [isValidating, setIsValidating] = useState(false);
   const [isCompressing, setIsCompressing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -6874,7 +6875,7 @@ function MainApp() {
   const [authLoading, setAuthLoading] = useState(true);
   const [view, setView] = useState<'landing' | 'auth' | 'roles' | 'app'>('landing');
   const [role, setRole] = useState<'client' | 'worker' | 'admin' | null>(null);
-  const [tab, setTab] = useState<'explore' | 'jobs' | 'help'>('explore');
+  const [tab, setTab] = useState<'explore' | 'jobs' | 'help' | 'profile'>('explore');
   const [jobs, setJobs] = useState<Job[]>([]);
   const lastJobCountRef = useRef<number>(0);
   const previousJobStatusesRef = useRef<Record<string, string>>({});
@@ -7540,7 +7541,21 @@ function MainApp() {
         }
       }
     }, (err) => console.error("User doc snapshot error:", err));
-    return () => unsubscribe();
+
+    const unsubscribeSec = onSnapshot(
+      doc(db, 'users', currentUser.uid, 'private_profile', 'security'),
+      (snap) => {
+        if (snap.exists()) {
+          setSecurityData(snap.data());
+        }
+      },
+      (err) => console.warn("Private profile snapshot warning:", err)
+    );
+
+    return () => {
+      unsubscribe();
+      unsubscribeSec();
+    };
   }, [currentUser?.uid]);
 
   useEffect(() => {
@@ -7560,7 +7575,8 @@ function MainApp() {
         uid: currentUser.uid,
         email: currentUser.email,
         role: r,
-        updatedAt: serverTimestamp()
+        updatedAt: serverTimestamp(),
+        lastActiveAt: serverTimestamp()
       }, { merge: true });
       setView('app');
     } catch (err) {
@@ -8078,23 +8094,26 @@ function MainApp() {
       setSecurityData(secData);
 
       // 2. Save public profile to users collection (without exposing government IDs)
-      await setDoc(doc(db, 'users', currentUser.uid), {
+      const publicPayload: any = {
         uid: currentUser.uid,
-        fullName: providerData.name,
-        role: 'worker',
-        phone: providerData.phone || userData?.phone || '',
-        category: providerData.category,
-        specialty: providerData.specialty || providerData.category,
+        fullName: String(providerData.name || '').slice(0, 100),
+        role: userData?.role === 'admin' ? 'admin' : 'worker',
+        phone: String(providerData.phone || userData?.phone || '').slice(0, 30),
+        category: String(providerData.category || '').slice(0, 60),
+        specialty: String(providerData.specialty || providerData.category || '').slice(0, 60),
         specialties: [providerData.category],
-        photo: providerData.photo,
-        verified: true,
+        photo: providerData.photo || '',
         portfolio: providerData.portfolio || [],
         email: currentUser.email,
-        level: 1,
-        jobs: 0,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      }, { merge: true });
+        level: userData?.level ?? 1,
+        jobs: userData?.jobs ?? 0,
+        updatedAt: serverTimestamp(),
+        lastActiveAt: serverTimestamp()
+      };
+      if (!userData?.createdAt) {
+        publicPayload.createdAt = serverTimestamp();
+      }
+      await setDoc(doc(db, 'users', currentUser.uid), publicPayload, { merge: true });
       setTab('jobs');
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `users/${currentUser?.uid || 'unknown'}`);
@@ -8119,15 +8138,15 @@ function MainApp() {
       // 2. Save public client profile
       await setDoc(doc(db, 'users', currentUser.uid), {
         uid: currentUser.uid,
-        fullName: clientData.fullName,
-        role: 'client',
-        phone: clientData.phone,
-        bairro: clientData.bairro,
-        city: clientData.city,
-        photo: clientData.photo,
-        verified: true,
+        fullName: String(clientData.fullName || '').slice(0, 100),
+        role: userData?.role === 'admin' ? 'admin' : 'client',
+        phone: String(clientData.phone || '').slice(0, 30),
+        bairro: String(clientData.bairro || '').slice(0, 80),
+        city: String(clientData.city || '').slice(0, 80),
+        photo: clientData.photo || '',
         email: currentUser.email,
-        updatedAt: serverTimestamp()
+        updatedAt: serverTimestamp(),
+        lastActiveAt: serverTimestamp()
       }, { merge: true });
       setShowClientProfileModal(false);
     } catch (err) {
@@ -8138,13 +8157,67 @@ function MainApp() {
   const handleSaveMandatoryPhone = async (normalizedPhone: string) => {
     if (!currentUser) return;
     try {
-      await updateDoc(doc(db, 'users', currentUser.uid), {
-        phone: normalizedPhone,
-        updatedAt: serverTimestamp()
-      });
+      await setDoc(doc(db, 'users', currentUser.uid), {
+        uid: currentUser.uid,
+        email: currentUser.email,
+        role: userData?.role || role || 'client',
+        phone: normalizedPhone.slice(0, 30),
+        updatedAt: serverTimestamp(),
+        lastActiveAt: serverTimestamp()
+      }, { merge: true });
       setUserData((prev: any) => ({ ...(prev || {}), phone: normalizedPhone }));
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `users/${currentUser?.uid}`);
+    }
+  };
+
+  const handleUpdateUserProfile = async (updates: ProfileUpdatePayload) => {
+    if (!currentUser) return;
+    try {
+      const secPayload: Record<string, any> = {
+        userId: currentUser.uid,
+        biPhoto: updates.biPhoto || '',
+        emergencyContactName: updates.emergencyContactName || '',
+        emergencyContactPhone: updates.emergencyContactPhone || '',
+        updatedAt: serverTimestamp()
+      };
+      if (updates.biSelfie !== undefined) {
+        secPayload.biSelfie = updates.biSelfie;
+      }
+      if (updates.nuit !== undefined) {
+        secPayload.nuit = updates.nuit;
+      }
+
+      await setDoc(doc(db, 'users', currentUser.uid, 'private_profile', 'security'), secPayload, { merge: true });
+      setSecurityData((prev: any) => ({ ...(prev || {}), ...secPayload }));
+
+      const effectiveRole = userData?.role || role || 'client';
+      const userPayload: Record<string, any> = {
+        uid: currentUser.uid,
+        email: currentUser.email,
+        role: effectiveRole,
+        fullName: String(updates.fullName || '').slice(0, 100),
+        phone: String(updates.phone || '').slice(0, 30),
+        city: String(updates.city || '').slice(0, 80),
+        bairro: String(updates.bairro || '').slice(0, 80),
+        photo: updates.photo || '',
+        updatedAt: serverTimestamp(),
+        lastActiveAt: serverTimestamp()
+      };
+
+      if (effectiveRole === 'worker' && updates.category) {
+        userPayload.category = String(updates.category).slice(0, 60);
+        userPayload.specialty = String(updates.category).slice(0, 60);
+        userPayload.specialties = [updates.category];
+        if (updates.portfolio !== undefined) {
+          userPayload.portfolio = updates.portfolio;
+        }
+      }
+
+      await setDoc(doc(db, 'users', currentUser.uid), userPayload, { merge: true });
+      setUserData((prev: any) => ({ ...(prev || {}), ...userPayload }));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `users/${currentUser.uid}`);
     }
   };
 
@@ -8610,6 +8683,22 @@ function MainApp() {
               <span>SOS</span>
             </button>
 
+            <button
+              onClick={() => setTab('profile')}
+              className={`w-10 h-10 rounded-xl flex items-center justify-center overflow-hidden border-2 transition-all shadow-sm active:scale-95 cursor-pointer ${
+                tab === 'profile'
+                  ? 'border-natural-accent ring-2 ring-natural-accent/20'
+                  : 'border-natural-line bg-natural-surface hover:border-natural-accent'
+              }`}
+              title="Meu Perfil & Informações"
+            >
+              {combinedUserData?.photo ? (
+                <img src={combinedUserData.photo} alt="Meu Perfil" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              ) : (
+                <User className={`w-5 h-5 ${tab === 'profile' ? 'text-natural-accent' : 'text-natural-heading'}`} />
+              )}
+            </button>
+
             {role === 'client' && (
               <button 
                 onClick={() => setShowClientProfileModal(true)}
@@ -8647,12 +8736,15 @@ function MainApp() {
           </div>
         </nav>
 
-        <nav className="flex px-6 items-center gap-10 my-4 overflow-x-auto no-scrollbar scroll-smooth bg-white py-2">
+        <nav className="flex px-6 items-center gap-6 my-4 overflow-x-auto no-scrollbar scroll-smooth bg-white py-2">
           <button onClick={() => setTab('explore')} className={`text-[12px] font-black uppercase tracking-[0.15em] transition-all whitespace-nowrap pb-3 border-b-4 ${tab === 'explore' ? 'text-natural-heading border-natural-accent' : 'text-natural-muted border-transparent opacity-30'}`}>
             COMEÇAR
           </button>
           <button onClick={() => { setTab('jobs'); if(role === 'admin') setAdminView('active'); }} className={`text-[12px] font-black uppercase tracking-[0.15em] transition-all whitespace-nowrap pb-3 border-b-4 ${tab === 'jobs' && (role !== 'admin' || adminView === 'active') ? 'text-natural-heading border-natural-accent' : 'text-natural-muted border-transparent opacity-30'}`}>
             BISCATES
+          </button>
+          <button onClick={() => setTab('profile')} className={`text-[12px] font-black uppercase tracking-[0.15em] transition-all whitespace-nowrap pb-3 border-b-4 ${tab === 'profile' ? 'text-natural-heading border-natural-accent' : 'text-natural-muted border-transparent opacity-30'}`}>
+            {t.profile || 'PERFIL'}
           </button>
           {role === 'admin' && (
             <>
@@ -8670,7 +8762,22 @@ function MainApp() {
           )}
         </nav>
 
-        {tab === 'explore' ? (
+        {tab === 'profile' ? (
+          <UserProfileView
+            currentUser={currentUser}
+            userData={combinedUserData}
+            role={role}
+            isManager={isManager}
+            balance={balance}
+            jobsCount={jobs.length}
+            lang={lang}
+            setLang={setLang}
+            t={t}
+            onSaveProfile={handleUpdateUserProfile}
+            onSwitchRole={() => setView('roles')}
+            onLogout={handleLogout}
+          />
+        ) : tab === 'explore' ? (
           <div className="flex-1 animate-in fade-in slide-in-from-bottom-4 duration-300">
              {role !== 'worker' ? (
                <div className="px-6 py-10">
@@ -8846,7 +8953,7 @@ function MainApp() {
                  </div>
                </div>
              ) : (
-               <WorkerProfileForm onSave={handleCreateProfile} t={t} initialPhone={userData?.phone || ''} isManager={isManager} />
+               <WorkerProfileForm onSave={handleCreateProfile} t={t} initialPhone={userData?.phone || ''} initialData={combinedUserData} isManager={isManager} />
              )}
           </div>
         ) : (
@@ -9366,24 +9473,28 @@ function MainApp() {
           )}
         </AnimatePresence>
 
-        <footer className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-2xl border-t-2 border-natural-line z-50 px-10 py-5 flex justify-between items-center max-w-md mx-auto rounded-t-[3rem] shadow-[0_-15px_50px_rgba(45,41,38,0.1)]">
-          <div onClick={() => setTab('explore')} className={`flex flex-col items-center cursor-pointer transition-all ${tab === 'explore' ? 'text-natural-accent scale-110' : 'text-natural-muted opacity-60'}`}>
-            <LayoutGrid className="w-7 h-7 mb-1" />
-            <span className="text-[9px] font-black uppercase tracking-tighter pt-0.5">{t.navHome}</span>
-          </div>
-          <div onClick={() => setTab('jobs')} className={`flex flex-col items-center cursor-pointer transition-all ${tab === 'jobs' ? 'text-natural-accent scale-110' : 'text-natural-muted opacity-60'}`}>
+        <footer className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-2xl border-t-2 border-natural-line z-50 px-6 py-4 grid grid-cols-4 items-center max-w-md mx-auto rounded-t-[3rem] shadow-[0_-15px_50px_rgba(45,41,38,0.1)]">
+          <button type="button" onClick={() => setTab('explore')} className={`min-h-[44px] flex flex-col items-center justify-center cursor-pointer transition-all ${tab === 'explore' ? 'text-natural-accent scale-105' : 'text-natural-muted opacity-60'}`}>
+            <LayoutGrid className="w-6 h-6 mb-1" />
+            <span className="text-[9px] font-black uppercase tracking-tighter pt-0.5 whitespace-nowrap">{t.navHome}</span>
+          </button>
+          <button type="button" onClick={() => setTab('jobs')} className={`min-h-[44px] flex flex-col items-center justify-center cursor-pointer transition-all ${tab === 'jobs' ? 'text-natural-accent scale-105' : 'text-natural-muted opacity-60'}`}>
             <div className="relative">
-              <MessageSquare className="w-7 h-7 mb-1" />
+              <MessageSquare className="w-6 h-6 mb-1" />
               {jobs.some(j => (role === 'client' && j.status === 'FINALIZADO') || (role === 'worker' && j.status === 'PAGO') || (role === 'admin' && j.status === 'VALIDACAO_PENDENTE')) && (
-                <div className="absolute -right-1 -top-1 w-3.5 h-3.5 bg-red-500 rounded-full border-2 border-white animate-pulse" />
+                <div className="absolute -right-1 -top-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white animate-pulse" />
               )}
             </div>
-            <span className="text-[9px] font-black uppercase tracking-tighter pt-0.5">{role === 'admin' ? t.navPending : t.navJobs}</span>
-          </div>
-          <div onClick={() => setTab('help')} className={`flex flex-col items-center cursor-pointer transition-all ${tab === 'help' ? 'text-natural-accent scale-110' : 'text-natural-muted opacity-60'}`}>
-            <Heart className="w-7 h-7 mb-1" />
-            <span className="text-[9px] font-black uppercase tracking-tighter pt-0.5">{t.navHelp}</span>
-          </div>
+            <span className="text-[9px] font-black uppercase tracking-tighter pt-0.5 whitespace-nowrap">{role === 'admin' ? t.navPending : t.navJobs}</span>
+          </button>
+          <button type="button" onClick={() => setTab('help')} className={`min-h-[44px] flex flex-col items-center justify-center cursor-pointer transition-all ${tab === 'help' ? 'text-natural-accent scale-105' : 'text-natural-muted opacity-60'}`}>
+            <Heart className="w-6 h-6 mb-1" />
+            <span className="text-[9px] font-black uppercase tracking-tighter pt-0.5 whitespace-nowrap">{t.navHelp}</span>
+          </button>
+          <button type="button" onClick={() => setTab('profile')} className={`min-h-[44px] flex flex-col items-center justify-center cursor-pointer transition-all ${tab === 'profile' ? 'text-natural-accent scale-105' : 'text-natural-muted opacity-60'}`}>
+            <User className="w-6 h-6 mb-1" />
+            <span className="text-[9px] font-black uppercase tracking-tighter pt-0.5 whitespace-nowrap">{t.profile || 'Perfil'}</span>
+          </button>
         </footer>
       </div>
     </div>
