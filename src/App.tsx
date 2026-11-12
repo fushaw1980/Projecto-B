@@ -648,7 +648,7 @@ const PwaGuideModal = memo(({ onShow, onClose }: { onShow: boolean, onClose: () 
 });
 
 const FeeBreakdown = ({ amount, t }: { amount: number, t: any }) => {
-  const fee = amount * 0.1;
+  const fee = Math.round(amount * 0.05);
   const net = amount - fee;
   return (
     <div className="bg-natural-surface/50 border border-natural-line rounded-2xl p-4 mt-2 space-y-2">
@@ -657,7 +657,7 @@ const FeeBreakdown = ({ amount, t }: { amount: number, t: any }) => {
         <span className="text-natural-heading">{amount} MT</span>
       </div>
       <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-red-500">
-        <span>Taxa do App (10%)</span>
+        <span>Taxa do App (5%)</span>
         <span>- {fee.toFixed(0)} MT</span>
       </div>
       <div className="pt-2 border-t border-natural-line flex justify-between text-[10px] font-black uppercase tracking-widest text-natural-accent">
@@ -1158,7 +1158,7 @@ const WorkerEarningsChart = memo(({ jobs, userData, balance, t }: { jobs: Job[],
       const key = `${year}-${monthStr}`;
 
       const found = months.find(m => m.monthKey === key);
-      const fee = Number(j.amount || 0) * 0.1;
+      const fee = Number(j.amount || 0) * 0.05;
       const net = Math.round(Number(j.payoutAmount ?? (Number(j.amount || 0) - fee)));
 
       if (found) {
@@ -1332,7 +1332,7 @@ const WorkerEarningsChart = memo(({ jobs, userData, balance, t }: { jobs: Job[],
       <div className="mt-4 pt-3 border-t border-natural-surface flex items-center justify-between text-[9px] font-bold text-natural-muted">
         <div className="flex items-center gap-1.5">
           <div className="w-1.5 h-1.5 rounded-full bg-natural-success animate-pulse" />
-          <span>{t.earningsNetNote || "Valores líquidos creditados no seu saldo após taxa de 10% do Garante."}</span>
+          <span>{t.earningsNetNote || "Valores líquidos creditados no seu saldo após taxa de 5% do Garante."}</span>
         </div>
         <span className="font-mono uppercase tracking-wider text-[8px] bg-natural-surface px-2 py-0.5 rounded-md border border-natural-line">
           MZ (MT)
@@ -1631,7 +1631,7 @@ const translations = {
     totalAccumulated6M: "Total Acumulado",
     monthlyAverage: "Média Mensal",
     bestMonth: "Melhor Mês",
-    earningsNetNote: "Valores líquidos creditados no seu saldo após dedução da taxa de 10% da plataforma.",
+    earningsNetNote: "Valores líquidos creditados no seu saldo após dedução da taxa de 5% da plataforma.",
     withdrawalFeeBadge: "Taxa de Saque: 3%",
     withdrawalFeeInfo: "Taxa de Saque Reduzida (3%)",
     withdrawalFeeSummary: "Taxa da Carteira Móvel (3%)",
@@ -1643,7 +1643,7 @@ const translations = {
     selectMonth: "Selecionar Mês",
     platformTotalEarnings: "Ganhos Totais da Plataforma",
     totalBiscatesCount: "Número de Biscates",
-    commissionsCollected: "Comissões Arrecadadas (10%)",
+    commissionsCollected: "Comissões Arrecadadas (5%)",
     workerNetPayouts: "Repasse aos Trabalhadores",
     generatingPdf: "A Gerar PDF...",
     pdfExportSuccess: "Resumo mensal em formato PDF exportado com sucesso!",
@@ -1857,7 +1857,7 @@ const translations = {
     totalAccumulated6M: "Total Accumulated",
     monthlyAverage: "Monthly Average",
     bestMonth: "Best Month",
-    earningsNetNote: "Net earnings credited to your balance after 10% platform fee deduction.",
+    earningsNetNote: "Net earnings credited to your balance after 5% platform fee deduction.",
     withdrawalFeeBadge: "Withdrawal Fee: 3%",
     withdrawalFeeInfo: "Reduced Withdrawal Fee (3%)",
     withdrawalFeeSummary: "Mobile Wallet Processing Fee (3%)",
@@ -1869,7 +1869,7 @@ const translations = {
     selectMonth: "Select Month",
     platformTotalEarnings: "Total Platform Earnings",
     totalBiscatesCount: "Number of Biscates",
-    commissionsCollected: "Commissions Collected (10%)",
+    commissionsCollected: "Commissions Collected (5%)",
     workerNetPayouts: "Worker Payouts",
     generatingPdf: "Generating PDF...",
     pdfExportSuccess: "Monthly summary PDF report exported successfully!",
@@ -2095,7 +2095,7 @@ const translations = {
     selectMonth: "Othanla Mweeri",
     platformTotalEarnings: "Musurukhu Wotheene wa Plataforma",
     totalBiscatesCount: "Nummero ya Miteko",
-    commissionsCollected: "Comissões Saakheliwe (10%)",
+    commissionsCollected: "Comissões Saakheliwe (5%)",
     workerNetPayouts: "Musurukhu wa Anamuteko",
     generatingPdf: "Okhuma PDF...",
     pdfExportSuccess: "Relatório ya mweeri yoopacerya okhuma ni mureerelo!",
@@ -3455,7 +3455,7 @@ const generateMonthlyPdfReport = (data: MonthlyReportPdfData) => {
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(6.8);
   doc.setTextColor(230, 81, 0);
-  doc.text('COMISSÕES ARRECADADAS (10%)', c3X + 4, y + 6);
+  doc.text('COMISSÕES ARRECADADAS (5%)', c3X + 4, y + 6);
   doc.setFontSize(12.5);
   doc.text(`${data.commissionsCollected.toLocaleString('pt-MZ')} MT`, c3X + 4, y + 14);
   doc.setFont('helvetica', 'normal');
@@ -3474,7 +3474,7 @@ const generateMonthlyPdfReport = (data: MonthlyReportPdfData) => {
   doc.setTextColor(44, 37, 35);
   doc.text('DISTRIBUIÇÃO:', margin + 4, y + 6.8);
   doc.setFont('helvetica', 'normal');
-  doc.text('Repasse Líquido aos Trabalhadores (90%):', margin + 28, y + 6.8);
+  doc.text('Repasse Líquido aos Trabalhadores (95%):', margin + 28, y + 6.8);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(27, 94, 32);
   doc.text(`${data.workerPayouts.toLocaleString('pt-MZ')} MT`, margin + 82, y + 6.8);
@@ -3502,7 +3502,7 @@ const generateMonthlyPdfReport = (data: MonthlyReportPdfData) => {
   doc.text('CATEGORIA / ESPECIALIDADE', margin + 3, y + 4.1);
   doc.text('BISCATES', margin + 72, y + 4.1);
   doc.text('VOLUME TOTAL (MT)', margin + 120, y + 4.1, { align: 'right' });
-  doc.text('COMISSÃO 10% (MT)', pageWidth - margin - 3, y + 4.1, { align: 'right' });
+  doc.text('COMISSÃO 5% (MT)', pageWidth - margin - 3, y + 4.1, { align: 'right' });
   y += 5.8;
 
   if (data.categoriesBreakdown.length === 0) {
@@ -3549,7 +3549,7 @@ const generateMonthlyPdfReport = (data: MonthlyReportPdfData) => {
     doc.text('CATEGORIA', margin + 75, currentY + 4.1);
     doc.text('DATA', margin + 115, currentY + 4.1);
     doc.text('VALOR BRUTO', margin + 150, currentY + 4.1, { align: 'right' });
-    doc.text('COMISSÃO (10%)', pageWidth - margin - 3, currentY + 4.1, { align: 'right' });
+    doc.text('COMISSÃO (5%)', pageWidth - margin - 3, currentY + 4.1, { align: 'right' });
     return currentY + 5.8;
   };
 
@@ -4275,7 +4275,7 @@ const AdminMetrics = memo(({
   const monthlyStats = useMemo(() => {
     const count = monthlyCompletedJobs.length;
     const totalVolume = monthlyCompletedJobs.reduce((acc, curr) => acc + Number(curr.amount || 0), 0);
-    const totalCommissions = Math.round(totalVolume * 0.10);
+    const totalCommissions = Math.round(totalVolume * 0.05);
     const workerPayouts = totalVolume - totalCommissions;
     const avgTicket = count > 0 ? Math.round(totalVolume / count) : 0;
 
@@ -4283,7 +4283,7 @@ const AdminMetrics = memo(({
     monthlyCompletedJobs.forEach(j => {
       const cat = j.category || 'Geral';
       const amt = Number(j.amount || 0);
-      const comm = Math.round(amt * 0.10);
+      const comm = Math.round(amt * 0.05);
       if (!catMap[cat]) {
         catMap[cat] = { count: 0, volume: 0, commission: 0 };
       }
@@ -4327,7 +4327,7 @@ const AdminMetrics = memo(({
           title: j.title || `Biscate #${j.id.slice(0, 6)}`,
           category: j.category || 'Geral',
           amount: amt,
-          commission: Math.round(amt * 0.10),
+          commission: Math.round(amt * 0.05),
           dateStr,
           status: j.status
         };
@@ -4485,7 +4485,7 @@ const AdminMetrics = memo(({
             <div>
               <p className="text-[9px] font-black uppercase tracking-widest text-natural-accent mb-1 flex items-center justify-between">
                 <span>{t.commissionsCollected || "Comissões Arrecadadas"}</span>
-                <span className="px-2 py-0.5 rounded-full bg-natural-accent text-white text-[9px] font-black">10%</span>
+                <span className="px-2 py-0.5 rounded-full bg-natural-accent text-white text-[9px] font-black">5%</span>
               </p>
               <h4 className="font-black text-2xl text-natural-accent tracking-tight">
                 {monthlyStats.totalCommissions.toLocaleString('pt-MZ')} <span className="text-xs font-bold">MT</span>
@@ -4502,7 +4502,7 @@ const AdminMetrics = memo(({
           <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-natural-success"></span>
             <span className="text-natural-muted font-bold">
-              {t.workerNetPayouts || "Repasse Líquido aos Trabalhadores (90%)"}:
+              {t.workerNetPayouts || "Repasse Líquido aos Trabalhadores (95%)"}:
             </span>
             <span className="font-black text-natural-success font-mono">
               {monthlyStats.workerPayouts.toLocaleString('pt-MZ')} MT
@@ -4570,7 +4570,7 @@ const AdminMetrics = memo(({
                       <th className="p-3">Categoria</th>
                       <th className="p-3 text-center">Biscates</th>
                       <th className="p-3 text-right">Volume (MT)</th>
-                      <th className="p-3 text-right">Comissão 10% (MT)</th>
+                      <th className="p-3 text-right">Comissão 5% (MT)</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-natural-line/60">
@@ -4602,14 +4602,14 @@ const AdminMetrics = memo(({
                       <th className="p-3">Categoria</th>
                       <th className="p-3">Data</th>
                       <th className="p-3 text-right">Valor (MT)</th>
-                      <th className="p-3 text-right">Comissão 10%</th>
+                      <th className="p-3 text-right">Comissão 5%</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-natural-line/60">
                     {monthlyCompletedJobs.map((j) => {
                       const d = getJobDate(j);
                       const amt = Number(j.amount || 0);
-                      const comm = Math.round(amt * 0.10);
+                      const comm = Math.round(amt * 0.05);
                       return (
                         <tr key={j.id} className="hover:bg-natural-surface/40">
                           <td className="p-3 font-black text-natural-heading">
@@ -6229,7 +6229,7 @@ const RoleSelection = ({ onSelect, onBack, lang, setLang, t, currentUser, isAdmi
   );
 };
 
-const WorkerProfileForm = ({ onSave, t, initialPhone }: { onSave: (data: { name: string, phone: string, category: string, photo: string, biPhoto: string, biSelfie: string, verified: boolean, portfolio: string[], nuit?: string, emergencyContactName?: string, emergencyContactPhone?: string, specialty?: string }) => void, t: any, initialPhone?: string }) => {
+const WorkerProfileForm = ({ onSave, t, initialPhone, isManager = false }: { onSave: (data: { name: string, phone: string, category: string, photo: string, biPhoto: string, biSelfie: string, verified: boolean, portfolio: string[], nuit?: string, emergencyContactName?: string, emergencyContactPhone?: string, specialty?: string }) => void, t: any, initialPhone?: string, isManager?: boolean }) => {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState(initialPhone || '');
   const [category, setCategory] = useState('Electricista Profissional');
@@ -6286,11 +6286,34 @@ const WorkerProfileForm = ({ onSave, t, initialPhone }: { onSave: (data: { name:
   };
 
   const handleFinalize = async () => {
-    if (!biPhoto || !biSelfie) return;
-    
     const cleaned = cleanPhone(phone);
     if (!isValidMozPhone(cleaned)) {
       setError('Por favor, introduza um número WhatsApp de Moçambique válido (ex: 84 123 4567 ou 82/83/85/86/87).');
+      return;
+    }
+
+    // BI é obrigatório para todos, excepto gerentes
+    if (!isManager && (!biPhoto || !biSelfie)) {
+      setError('A foto do Bilhete de Identidade (BI) e a Selfie correspondente são obrigatórias para auditoria e segurança de prestadores (dispensadas apenas para gerentes).');
+      return;
+    }
+
+    // Se for gerente e não forneceu BI/Selfie, regista de imediato sem bloquear
+    if (isManager && (!biPhoto || !biSelfie)) {
+      onSave({ 
+        name: name.trim() || 'Gerente Mozbiscates', 
+        phone: normalizeMozPhone(cleaned),
+        category, 
+        photo: photo || '', 
+        biPhoto: biPhoto || '', 
+        biSelfie: biSelfie || '', 
+        verified: true,
+        portfolio,
+        nuit: nuit.trim() || undefined,
+        emergencyContactName: emergencyContactName.trim() || undefined,
+        emergencyContactPhone: emergencyContactPhone.trim() || undefined,
+        specialty: category
+      });
       return;
     }
 
@@ -6316,8 +6339,8 @@ const WorkerProfileForm = ({ onSave, t, initialPhone }: { onSave: (data: { name:
           phone: normalizeMozPhone(cleaned),
           category, 
           photo: photo || '', 
-          biPhoto, 
-          biSelfie, 
+          biPhoto: biPhoto || '', 
+          biSelfie: biSelfie || '', 
           verified: true,
           portfolio,
           nuit: nuit.trim() || undefined,
@@ -6527,10 +6550,22 @@ const WorkerProfileForm = ({ onSave, t, initialPhone }: { onSave: (data: { name:
         </div>
 
         {/* Verification Section */}
-        <div className="bg-amber-50 p-6 rounded-[2rem] border-2 border-dashed border-amber-200">
-          <p className="text-[10px] font-black text-amber-900 uppercase tracking-widest mb-4 italic flex items-center gap-2">
-            <Lock className="w-4 h-4" /> Segurança: Verificação Obrigatória de BI
-          </p>
+        <div className={`p-6 rounded-[2rem] border-2 border-dashed ${isManager ? 'bg-emerald-50/70 border-emerald-300' : 'bg-amber-50 border-amber-200'}`}>
+          <div className="flex items-center justify-between mb-3">
+            <p className={`text-[10px] font-black uppercase tracking-widest italic flex items-center gap-2 ${isManager ? 'text-emerald-900' : 'text-amber-900'}`}>
+              <Lock className="w-4 h-4" /> Segurança: Verificação de BI {!isManager ? 'Obrigatória' : '(Dispensada para Gerência)'}
+            </p>
+            {isManager && (
+              <span className="text-[8px] font-black uppercase bg-emerald-600 text-white px-2 py-0.5 rounded-full">
+                👑 Gerência
+              </span>
+            )}
+          </div>
+          {isManager && (
+            <p className="text-[10px] text-emerald-800 font-bold mb-3 leading-tight">
+              Conta de Gerência reconhecida: Envio de BI e Selfie é opcional para administradores e gerentes.
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-4">
             <label className="cursor-pointer">
               <div className="h-28 bg-white rounded-xl border border-natural-line flex flex-col items-center justify-center overflow-hidden relative group">
@@ -6599,7 +6634,7 @@ const WorkerProfileForm = ({ onSave, t, initialPhone }: { onSave: (data: { name:
 
         <button 
           onClick={handleFinalize} 
-          disabled={!name || !phone.trim() || !biPhoto || !biSelfie || isValidating || isCompressing}
+          disabled={!name || !phone.trim() || (!isManager && (!biPhoto || !biSelfie)) || isValidating || isCompressing}
           className="w-full bg-natural-accent text-white font-black py-5 rounded-[2rem] shadow-xl shadow-natural-accent/30 text-lg uppercase tracking-widest mt-4 active:scale-95 transition-transform disabled:opacity-50 flex items-center justify-center gap-3"
         >
           {isValidating || isCompressing ? (
@@ -7908,7 +7943,7 @@ function MainApp() {
             } else if (change.type === 'modified') {
               // DETECT IF CLIENT CONFIRMED THE FINISHED SERVICE!
               if (job.status === 'CONCLUIDO' && prevStatus && prevStatus !== 'CONCLUIDO') {
-                const fee = (job.amount || 0) * 0.1;
+                const fee = (job.amount || 0) * 0.05;
                 const netAmount = Math.round(job.payoutAmount ?? ((job.amount || 0) - fee));
                 const title = t.payoutCreditedTitle || "Saldo Creditado! 💰🎉";
                 const body = `${t.payoutCreditedBody || "O cliente confirmou o serviço finalizado. O seu saldo foi creditado com sucesso!"} (+${netAmount} MT • ${job.category})`;
@@ -8171,7 +8206,7 @@ function MainApp() {
           }
 
           const title = t.payoutCreditedTitle || "Serviço Confirmado e Liquidado! 💰";
-          const body = `O valor líquido de ${payoutRes.netAmount} MT (após comissão oficial de 10%: ${payoutRes.fee} MT) foi creditado com sucesso ao prestador. ID: ${payoutRes.transactionId}`;
+          const body = `O valor líquido de ${payoutRes.netAmount} MT (após comissão oficial de 5%: ${payoutRes.fee} MT) foi creditado com sucesso ao prestador. ID: ${payoutRes.transactionId}`;
           sendLocalNotification(title, {
             body,
             tag: `payout-${job.id}`,
@@ -8261,6 +8296,16 @@ function MainApp() {
     return <RoleSelection onSelect={handleRoleSelection} onBack={() => setView('landing')} lang={lang} setLang={setLang} t={t} currentUser={currentUser} isAdminEmail={isAdminEmail} />;
   }
 
+  // Identificação do perfil de Gerente / Administrador
+  const isManager = Boolean(
+    role === 'admin' ||
+    userData?.role === 'admin' ||
+    isAdminEmail ||
+    currentUser?.email === 'fushawshaw@gmail.com' ||
+    currentUser?.email === 'wanderj419@gmail.com' ||
+    currentUser?.email === 'mozbiscates@gmail.com'
+  );
+
   // From here on, view === 'app' and role is defined
   if (role === 'worker' && !userData?.category) {
     return (
@@ -8269,13 +8314,19 @@ function MainApp() {
           <h1 className="font-black italic text-xl">Mozbiscates</h1>
           <button onClick={handleLogout} className="text-natural-muted font-black text-[10px] uppercase">{t.logout || 'Sair'}</button>
         </header>
-        <WorkerProfileForm onSave={handleCreateProfile} t={t} initialPhone={userData?.phone || ''} />
+        <WorkerProfileForm onSave={handleCreateProfile} t={t} initialPhone={userData?.phone || ''} isManager={isManager} />
       </div>
     );
   }
 
-  // Cadastro Obrigatório de Segurança e Contacto para Clientes
-  if (role === 'client' && (!combinedUserData?.phone || !isValidMozPhone(cleanPhone(combinedUserData?.phone)))) {
+  // Cadastro Obrigatório de Segurança e Contacto para Clientes (BI obrigatório excepto para gerentes)
+  const clientNeedsSecuritySetup = role === 'client' && (
+    !combinedUserData?.phone ||
+    !isValidMozPhone(cleanPhone(combinedUserData?.phone)) ||
+    (!isManager && !combinedUserData?.biPhoto)
+  );
+
+  if (clientNeedsSecuritySetup) {
     return (
       <div className="min-h-screen bg-natural-bg p-4 flex flex-col items-center justify-center">
         <header className="w-full max-w-lg py-4 flex justify-between items-center mb-4">
@@ -8286,6 +8337,7 @@ function MainApp() {
           initialData={combinedUserData}
           onSave={handleCreateClientProfile}
           isMandatory={true}
+          isManager={isManager}
         />
       </div>
     );
@@ -8314,6 +8366,7 @@ function MainApp() {
           onSave={handleCreateClientProfile}
           onCancel={() => setShowClientProfileModal(false)}
           isMandatory={false}
+          isManager={isManager}
         />
       )}
 
@@ -8793,7 +8846,7 @@ function MainApp() {
                  </div>
                </div>
              ) : (
-               <WorkerProfileForm onSave={handleCreateProfile} t={t} initialPhone={userData?.phone || ''} />
+               <WorkerProfileForm onSave={handleCreateProfile} t={t} initialPhone={userData?.phone || ''} isManager={isManager} />
              )}
           </div>
         ) : (
@@ -9022,7 +9075,7 @@ function MainApp() {
                                    Para a segurança mútua da comunidade Mozbiscates, todos os utilizadores devem seguir estritamente as diretrizes abaixo:
                                  </p>
                                  <ul className="list-disc pl-5 space-y-1">
-                                   <li><strong>Verificação Obrigatória:</strong> Todos os prestadores devem enviar fotos reais do seu Bilhete de Identidade (BI) e uma Selfie correspondente para auditoria da nossa equipe e algoritmos.</li>
+                                   <li><strong>Verificação de BI:</strong> Obrigatória para prestadores e clientes da plataforma para prevenção de fraudes e integridade (dispensada exclusivamente para contas autorizadas de gerência).</li>
                                    <li><strong>Canais Oficiais de Pagamento:</strong> Nunca realize pagamentos fora do fluxo oficial de Escrow do aplicativo. Transações feitas por fora perdem a nossa cobertura de reembolso e seguro.</li>
                                    <li><strong>Check-in e Check-out:</strong> O prestador deve fazer fotos do "Antes" e do "Depois" no início e fim de cada biscate para documentar o trabalho efetuado com fidelidade.</li>
                                  </ul>

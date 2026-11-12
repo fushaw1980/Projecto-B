@@ -252,8 +252,8 @@ async function startServer() {
           throw new Error("INVALID_AMOUNT");
         }
 
-        // Cálculo da comissão oficial (10% Mozbiscates) e montante líquido no servidor
-        const fee = Math.round(amount * 0.10);
+        // Cálculo da comissão oficial (5% Mozbiscates) e montante líquido no servidor
+        const fee = Math.round(amount * 0.05);
         const netAmount = amount - fee;
 
         // Identificador único da liquidação
@@ -307,7 +307,7 @@ async function startServer() {
       try {
         await jobRef.collection("messages").add({
           senderId: "system",
-          text: `🎉 Serviço Confirmado pelo Cliente! O valor de ${result.netAmount} MT (deduzida taxa de comissão de 10%: ${result.fee} MT) foi creditado com sucesso ao prestador. ID: ${result.transactionId}`,
+          text: `🎉 Serviço Confirmado pelo Cliente! O valor de ${result.netAmount} MT (deduzida taxa de comissão de 5%: ${result.fee} MT) foi creditado com sucesso ao prestador. ID: ${result.transactionId}`,
           createdAt: FieldValue.serverTimestamp()
         });
       } catch (msgErr) {

@@ -1,6 +1,0 @@
-{
-  "summary":  "Plano detalhado de implementação para a remediação de segurança do Mozbiscates em 4 fases: Protecção dos dados pessoais (PII), Administração e saldos, Protecção do servidor e Funcionalidades/testes, com análise de ficheiros, dependências, migração backwards-compatible e plano de reversão.",
-  "updatedAt":  "2026-10-21T22:41:13.160733217Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}
