@@ -612,13 +612,23 @@ async function startServer() {
     const distPath = path.resolve(process.cwd(), 'dist');
     console.log(`[PROD] Serving static files from: ${distPath}`);
     
-    // Serve static files
-    app.use(express.static(distPath));
+    // Cache long-lived hashed assets; keep HTML fresh
+    app.use(express.static(distPath, {
+      maxAge: '7d',
+      setHeaders: (res, filePath) => {
+        if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        } else if (filePath.endsWith('.html') || filePath.endsWith('sw.js')) {
+          res.setHeader('Cache-Control', 'no-cache');
+        }
+      }
+    }));
 
     // SPA Fallback for any other route
     app.get('*', (req, res) => {
       const indexPath = path.join(distPath, 'index.html');
       if (fs.existsSync(indexPath)) {
+        res.setHeader('Cache-Control', 'no-cache');
         res.sendFile(indexPath);
       } else {
         res.status(404).send("Application not built. Please run 'npm run build'.");

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, memo, useMemo, useRef, Fragment } from 'react';
+import React, { useState, useEffect, useCallback, memo, useMemo, useRef, Fragment, lazy, Suspense } from 'react';
 import { 
   Search, 
   MapPin, 
@@ -80,16 +80,28 @@ import {
   Trash2,
   UserCog
 } from 'lucide-react';
-import jsPDF from 'jspdf';
+import toast, { Toaster } from 'react-hot-toast';
 import { motion, AnimatePresence } from 'motion/react';
-import { Html5Qrcode } from 'html5-qrcode';
 import { compressImage } from './lib/imageOptimizer';
 import { ALL_SPECIALTIES, FREQUENT_CATEGORIES } from './data/specialties';
-import { ClientSecurityProfileModal } from './components/ClientSecurityProfileModal';
-import { EmergencyModal } from './components/EmergencyModal';
-import { AdminEmergencyMonitor } from './components/AdminEmergencyMonitor';
-import { MandatoryWhatsAppModal } from './components/MandatoryWhatsAppModal';
-import { UserProfileView, ProfileUpdatePayload } from './components/UserProfileView';
+import type { ProfileUpdatePayload } from './components/UserProfileView';
+
+const MapView = lazy(() => import('./components/MapView'));
+const ClientSecurityProfileModal = lazy(() =>
+  import('./components/ClientSecurityProfileModal').then((m) => ({ default: m.ClientSecurityProfileModal }))
+);
+const EmergencyModal = lazy(() =>
+  import('./components/EmergencyModal').then((m) => ({ default: m.EmergencyModal }))
+);
+const AdminEmergencyMonitor = lazy(() =>
+  import('./components/AdminEmergencyMonitor').then((m) => ({ default: m.AdminEmergencyMonitor }))
+);
+const MandatoryWhatsAppModal = lazy(() =>
+  import('./components/MandatoryWhatsAppModal').then((m) => ({ default: m.MandatoryWhatsAppModal }))
+);
+const UserProfileView = lazy(() =>
+  import('./components/UserProfileView').then((m) => ({ default: m.UserProfileView }))
+);
 import { 
   getWhatsAppUrl, 
   isValidMozPhone, 
@@ -184,46 +196,6 @@ const shortenUrl = async (url: string) => {
   return url;
 };
 
-import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline } from 'react-leaflet';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
-
-// Cached Leaflet SVG Markers to prevent recreating DOM nodes on every render loop
-const MARKER_ICONS: Record<string, L.DivIcon> = {};
-const getCustomMarker = (type: 'job' | 'provider' | 'user') => {
-  if (!MARKER_ICONS[type]) {
-    const colors = {
-      job: '#10B981',
-      provider: '#E65100',
-      user: '#3B82F6'
-    };
-    MARKER_ICONS[type] = L.divIcon({
-      className: 'custom-div-icon',
-      html: `
-        <div class="relative flex items-center justify-center">
-          <div class="absolute w-8 h-8 rounded-full blur-[2px] opacity-20" style="background-color: ${colors[type]}"></div>
-          <div class="relative w-6 h-6 rounded-full border-2 border-white shadow-sm flex items-center justify-center" style="background-color: ${colors[type]}">
-            <div class="w-1.5 h-1.5 rounded-full bg-white"></div>
-          </div>
-          <div class="absolute -bottom-1 w-1.5 h-1.5 rotate-45" style="background-color: ${colors[type]}"></div>
-        </div>
-      `,
-      iconSize: [32, 32],
-      iconAnchor: [16, 24],
-      popupAnchor: [0, -20]
-    });
-  }
-  return MARKER_ICONS[type];
-};
-
-const ChangeView = ({ center }: { center: [number, number] }) => {
-  const map = useMap();
-  useEffect(() => {
-    map.setView(center);
-  }, [center, map]);
-  return null;
-};
-
 const handleFirestoreError = (error: any, operation: OperationType, path: string | null = null) => {
   const authInfo = auth.currentUser ? {
     userId: auth.currentUser.uid,
@@ -301,246 +273,7 @@ const triggerWindowNotification = (title: string, options: NotificationOptions &
     };
   } catch(e) {}
 };
-// --- Map Components ---
-interface MapViewProps {
-  jobs?: Job[];
-  providers?: Provider[];
-  userPos: [number, number];
-  t: any;
-  selectedProvider?: Provider | null;
-  onSelectProvider?: (p: Provider) => void;
-}
-
-const MapView = memo(({ 
-  jobs = [], 
-  providers = [], 
-  userPos, 
-  t, 
-  selectedProvider,
-  onSelectProvider 
-}: MapViewProps) => {
-  const [mapType, setMapType] = useState('streets');
-  const [localSelectedProvider, setLocalSelectedProvider] = useState<Provider | null>(null);
-
-  const activeTargetProvider = selectedProvider || localSelectedProvider;
-
-  // Active target calculations using Haversine
-  const activeTargetData = useMemo(() => {
-    if (!activeTargetProvider) return null;
-    const coords = getProviderCoordinates(activeTargetProvider.id, userPos);
-    const distanceKm = calculateHaversineDistanceKm(userPos, coords);
-    const travel = estimateTravelTime(distanceKm);
-    return { coords, distanceKm, travel };
-  }, [activeTargetProvider, userPos]);
-
-  return (
-    <div className="w-full h-[65vh] rounded-[3rem] overflow-hidden border-4 border-white shadow-premium relative z-10 group mt-4">
-      {/* Top Map Badge */}
-      <div className="absolute top-6 left-6 z-[1000] flex flex-col gap-2 pointer-events-none">
-        <div className="bg-white/95 backdrop-blur-md px-4 py-2 rounded-2xl border border-natural-line/50 shadow-premium flex items-center gap-2 transition-transform group-hover:scale-105">
-          <Sparkles className="w-4 h-4 text-natural-accent" />
-          <span className="text-[10px] font-black uppercase tracking-widest text-natural-heading">Explorar arredores</span>
-        </div>
-        <div className="bg-natural-accent text-white px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider self-start shadow-sm shadow-orange-200">
-          {providers.length} {t.verified || 'Verificados'}
-        </div>
-      </div>
-
-      {/* Floating Travel Time Estimation HUD over Map */}
-      {activeTargetProvider && activeTargetData && (
-        <div className="absolute bottom-4 left-4 right-4 z-[1000] bg-white/95 backdrop-blur-md rounded-2xl border-2 border-natural-accent shadow-2xl p-3 flex items-center justify-between gap-3 animate-in fade-in slide-in-from-bottom duration-300">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-orange-100 flex items-center justify-center text-natural-accent shrink-0">
-              <Navigation className="w-5 h-5 animate-pulse" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <p className="text-[11px] font-black uppercase text-natural-heading tracking-tight truncate">
-                  {activeTargetProvider.name}
-                </p>
-                <span className="bg-orange-50 text-natural-accent font-black text-[9px] px-1.5 py-0.5 rounded border border-orange-200 shrink-0">
-                  {activeTargetData.travel.formattedDistance} (Haversine)
-                </span>
-              </div>
-              <div className="flex items-center gap-2 mt-0.5 text-[11px] font-black text-natural-heading">
-                <span className="flex items-center gap-1 text-slate-800" title="Carro ou Chapa urbano">
-                  🚗 ~{activeTargetData.travel.carMinutes} min
-                </span>
-                <span className="text-slate-300">•</span>
-                <span className="flex items-center gap-1 text-slate-800" title="Txopela ou Moto">
-                  🛵 ~{activeTargetData.travel.motoMinutes} min
-                </span>
-                <span className="text-slate-300">•</span>
-                <span className="flex items-center gap-1 text-slate-800" title="Caminhada a pé">
-                  🚶 ~{activeTargetData.travel.walkingMinutes} min
-                </span>
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <button
-              onClick={() => setLocalSelectedProvider(null)}
-              className="p-2 text-natural-muted hover:text-black rounded-lg text-xs"
-              title="Limpar seleção"
-            >
-              <X className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => onSelectProvider?.(activeTargetProvider)}
-              className="px-3.5 py-2 bg-natural-accent text-white rounded-xl text-[10px] font-black uppercase tracking-wider shadow-sm hover:scale-105 active:scale-95 transition-transform"
-            >
-              Ver Perfil
-            </button>
-          </div>
-        </div>
-      )}
-      
-      <MapContainer center={userPos} zoom={13} scrollWheelZoom={false} style={{ height: '100%', width: '100%' }} zoomControl={false}>
-        {mapType === 'streets' ? (
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
-        ) : (
-          <TileLayer
-            attribution='Imagery &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
-            url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-          />
-        )}
-        <ChangeView center={userPos} />
-        <MapControls userPos={userPos} setMapType={setMapType} mapType={mapType} />
-        
-        {/* Polyline line connecting user to selected provider */}
-        {activeTargetData && (
-          <Polyline 
-            positions={[userPos, activeTargetData.coords]} 
-            pathOptions={{ color: '#E65100', weight: 4, dashArray: '6, 8', opacity: 0.9 }} 
-          />
-        )}
-
-        {providers.map(p => {
-          const providerPos = getProviderCoordinates(p.id, userPos);
-          const distance = calculateHaversineDistanceKm(userPos, providerPos);
-          const travel = estimateTravelTime(distance);
-          const isCurrentActive = activeTargetProvider?.id === p.id;
-
-          return (
-            <Marker 
-              key={p.id} 
-              position={providerPos} 
-              icon={getCustomMarker('provider')}
-              eventHandlers={{
-                click: () => {
-                  setLocalSelectedProvider(p);
-                }
-              }}
-            >
-              <Popup className="premium-popup">
-                <div className="p-3 min-w-[200px]">
-                  <div className="flex items-center gap-3 mb-2.5 pb-2.5 border-b border-natural-line/30">
-                    <div className="w-10 h-10 rounded-2xl bg-natural-surface border border-natural-line overflow-hidden shadow-sm shrink-0 flex items-center justify-center">
-                      {p.photo ? (
-                        <img src={p.photo} alt={p.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                      ) : (
-                        <User className="w-5 h-5 text-natural-muted/60" />
-                      )}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="font-black text-sm text-natural-heading leading-tight truncate">{p.name}</p>
-                      <div className="flex items-center gap-1 mt-0.5">
-                        <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                        <span className="text-xs font-black text-natural-heading">{p.rating}</span>
-                        <span className="text-[9px] font-bold text-natural-muted">({p.jobs} jobs)</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5 mb-2.5">
-                    <div className="flex items-center gap-2">
-                      <Wrench className="w-3 h-3 text-natural-accent shrink-0" />
-                      <p className="font-black text-[10px] text-natural-accent uppercase tracking-wider">{p.category}</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <MapPin className="w-3 h-3 text-natural-muted shrink-0" />
-                      <p className="text-[10px] text-natural-muted font-bold">
-                        {p.bairro}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Estimativa de Deslocação Haversine */}
-                  <div className="p-2.5 bg-orange-50 border border-orange-200 rounded-2xl mb-2.5">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-[9px] font-black uppercase text-orange-900 flex items-center gap-1 tracking-wider">
-                        <Clock className="w-3 h-3 text-natural-accent shrink-0" /> Tempo Estimado
-                      </span>
-                      <span className="text-[9px] font-black text-natural-accent font-mono bg-white px-1.5 py-0.5 rounded border border-orange-200">
-                        {travel.formattedDistance}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-1 text-center mt-1.5">
-                      <div className="bg-white p-1 rounded-xl border border-orange-100 shadow-2xs">
-                        <span className="text-[8px] font-bold text-slate-500 block">🚗 Carro</span>
-                        <span className="text-[10px] font-black text-natural-heading leading-none">~{travel.carMinutes}m</span>
-                      </div>
-                      <div className="bg-white p-1 rounded-xl border border-orange-100 shadow-2xs">
-                        <span className="text-[8px] font-bold text-slate-500 block">🛵 Txopela</span>
-                        <span className="text-[10px] font-black text-natural-heading leading-none">~{travel.motoMinutes}m</span>
-                      </div>
-                      <div className="bg-white p-1 rounded-xl border border-orange-100 shadow-2xs">
-                        <span className="text-[8px] font-bold text-slate-500 block">🚶 A pé</span>
-                        <span className="text-[10px] font-black text-natural-heading leading-none">~{travel.walkingMinutes}m</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <button 
-                    onClick={() => {
-                      setLocalSelectedProvider(p);
-                      onSelectProvider?.(p);
-                    }}
-                    className="w-full bg-natural-accent text-white py-2.5 rounded-xl text-[10px] font-black uppercase tracking-wider shadow-sm hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-1.5"
-                  >
-                    <span>Ver Perfil e Contratar</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </Popup>
-            </Marker>
-          );
-        })}
-
-        {jobs.filter(j => j.lat && j.lng).map(job => (
-          <Marker key={job.id} position={[job.lat!, job.lng!]} icon={getCustomMarker('job')}>
-            <Popup className="premium-popup">
-              <div className="p-3 min-w-[140px]">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                  <p className="font-black text-[10px] text-green-600 uppercase tracking-widest">Biscate Aberto</p>
-                </div>
-                <p className="font-black text-lg text-natural-heading leading-none mb-1">{job.amount} MT</p>
-                <p className="font-bold text-[10px] text-natural-muted mb-2 uppercase tracking-tight">{job.category}</p>
-                <div className="bg-natural-surface p-2 rounded-xl border border-natural-line/50">
-                  <p className="text-[10px] text-natural-heading font-medium line-clamp-3 italic opacity-80">"{job.description}"</p>
-                </div>
-              </div>
-            </Popup>
-          </Marker>
-        ))}
-        
-        <Marker position={userPos} icon={getCustomMarker('user')}>
-          <Popup className="premium-popup">
-            <div className="p-2 space-y-1">
-              <p className="text-[10px] font-black uppercase tracking-[min(3px,0.2em)] text-blue-600 text-center">Você está aqui</p>
-              <div className="w-full h-[1px] bg-blue-100" />
-              <p className="text-[9px] text-center font-bold text-natural-muted">Pesquisando profissionais próximos...</p>
-            </div>
-          </Popup>
-        </Marker>
-      </MapContainer>
-    </div>
-  );
-});
+// --- MapView extracted to lazy ./components/MapView.tsx ---
 
 interface Provider {
   id: string;
@@ -911,7 +644,7 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
               onClick={async () => {
                 const granted = await requestNotificationPermission();
                 if (granted) {
-                  alert("Notificações push activadas com sucesso!");
+                  toast.success("Notificações push activadas com sucesso!");
                 }
               }}
               className="w-full flex items-center justify-center gap-2 text-[9px] font-black uppercase tracking-wider text-amber-800 bg-amber-50 hover:bg-amber-100 px-3 py-2.5 rounded-xl border border-amber-200 transition-all shadow-sm active:scale-95"
@@ -2271,22 +2004,25 @@ const QrScannerModal = memo(({ isOpen, onClose, onScanSuccess, jobId, t }: { isO
     setCameraError(false);
     setCameraLoading(true);
 
-    let html5Qrcode: Html5Qrcode | null = null;
+    let html5Qrcode: any = null;
+    let cancelled = false;
     const qrReaderId = "qr-reader-container";
     
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       try {
+        const { Html5Qrcode } = await import('html5-qrcode');
+        if (cancelled) return;
         html5Qrcode = new Html5Qrcode(qrReaderId);
         html5Qrcode.start(
           { facingMode: "environment" },
           {
             fps: 10,
-            qrbox: (width, height) => {
+            qrbox: (width: number, height: number) => {
               const size = Math.min(width, height) * 0.75;
               return { width: size, height: size };
             }
           },
-          (decodedText) => {
+          (decodedText: string) => {
             const trimmed = decodedText.trim();
             let isMatch = false;
             if (trimmed === jobId) {
@@ -2306,7 +2042,7 @@ const QrScannerModal = memo(({ isOpen, onClose, onScanSuccess, jobId, t }: { isO
               if (html5Qrcode) {
                 html5Qrcode.stop().then(() => {
                   onScanSuccess();
-                }).catch(err => {
+                }).catch((err: any) => {
                   console.warn(err);
                   onScanSuccess();
                 });
@@ -2314,30 +2050,35 @@ const QrScannerModal = memo(({ isOpen, onClose, onScanSuccess, jobId, t }: { isO
                 onScanSuccess();
               }
             } else {
-              alert(`${t.scanError}\n\nLido: "${decodedText}"`);
+              toast.error(`${t.scanError} (Lido: "${decodedText}")`);
             }
           },
-          (errorMessage) => {
+          () => {
             // Quiet debug logs
           }
         ).then(() => {
-          setCameraLoading(false);
-        }).catch(err => {
+          if (!cancelled) setCameraLoading(false);
+        }).catch((err: any) => {
           console.warn("Failed starting html5-qrcode:", err);
-          setCameraError(true);
-          setCameraLoading(false);
+          if (!cancelled) {
+            setCameraError(true);
+            setCameraLoading(false);
+          }
         });
       } catch (e) {
         console.warn("Failed initializing html5-qrcode:", e);
-        setCameraError(true);
-        setCameraLoading(false);
+        if (!cancelled) {
+          setCameraError(true);
+          setCameraLoading(false);
+        }
       }
-    }, 400);
+    }, 300);
 
     return () => {
+      cancelled = true;
       clearTimeout(timer);
       if (html5Qrcode && html5Qrcode.isScanning) {
-        html5Qrcode.stop().catch(err => console.warn("Stop on unmount failed:", err));
+        html5Qrcode.stop().catch((err: any) => console.warn("Stop on unmount failed:", err));
       }
     };
   }, [isOpen, jobId, onScanSuccess, t]);
@@ -2423,7 +2164,7 @@ const ReviewModal = memo(({ providerId, onFinish, t, currentUser }: { providerId
   const submit = async () => {
     const user = currentUser || auth.currentUser;
     if (!user) {
-      alert("Por favor, inicie sessão para submeter uma avaliação.");
+      toast.error("Por favor, inicie sessão para submeter uma avaliação.");
       return;
     }
     setSubmitting(true);
@@ -3152,11 +2893,11 @@ const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt', onPani
           <div className="grid grid-cols-2 gap-2">
             <div>
               <p className="text-[8px] font-black uppercase text-center mb-1">{t.before}</p>
-              <img src={job.photoBefore} alt="" className="w-full h-24 object-cover rounded-xl border border-natural-line" />
+              <img src={job.photoBefore} alt="" loading="lazy" decoding="async" className="w-full h-24 object-cover rounded-xl border border-natural-line" />
             </div>
             <div>
               <p className="text-[8px] font-black uppercase text-center mb-1">{t.after}</p>
-              <img src={job.photoAfter} alt="" className="w-full h-24 object-cover rounded-xl border-2 border-natural-success" />
+              <img src={job.photoAfter} alt="" loading="lazy" decoding="async" className="w-full h-24 object-cover rounded-xl border-2 border-natural-success" />
             </div>
           </div>
           <button onClick={() => setShowReview(true)} className="w-full bg-natural-success text-white font-black py-4 rounded-2xl shadow-lg shadow-green-100">
@@ -3535,7 +3276,8 @@ interface MonthlyReportPdfData {
   issuedAt: string;
 }
 
-const generateMonthlyPdfReport = (data: MonthlyReportPdfData) => {
+const generateMonthlyPdfReport = async (data: MonthlyReportPdfData) => {
+  const { default: jsPDF } = await import('jspdf');
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -3859,7 +3601,7 @@ const InactivityFeedbackModal = memo(({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) {
-      alert("Por favor, inicie sessão para submeter o seu feedback.");
+      toast.error("Por favor, inicie sessão para submeter o seu feedback.");
       return;
     }
     setSubmitting(true);
@@ -4646,7 +4388,7 @@ const AdminMetrics = memo(({
     };
   }, [monthlyCompletedJobs]);
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
     try {
       setIsExporting(true);
       const currentMonthMeta = availableMonths.find(m => m.key === selectedMonth);
@@ -4672,7 +4414,7 @@ const AdminMetrics = memo(({
         };
       });
 
-      generateMonthlyPdfReport({
+      await generateMonthlyPdfReport({
         monthKey: selectedMonth,
         monthLabel,
         totalVolume: monthlyStats.totalVolume,
@@ -7431,12 +7173,12 @@ const ProviderCard = memo(({ provider, onSelect, userPos }: { provider: Provider
             const shareUrl = `${window.location.origin}${window.location.pathname}?workerId=${provider.id}`;
             if (navigator.clipboard) {
               navigator.clipboard.writeText(shareUrl).then(() => {
-                alert("Link do perfil copiado para a área de transferência!");
+                toast.success("Link do perfil copiado para a área de transferência!");
               }).catch(() => {
-                alert(`Link do perfil: ${shareUrl}`);
+                toast(`Link do perfil: ${shareUrl}`);
               });
             } else {
-              alert(`Link do perfil: ${shareUrl}`);
+              toast(`Link do perfil: ${shareUrl}`);
             }
           }}
           className="p-2 bg-natural-surface rounded-full hover:bg-natural-accent hover:text-white transition-colors"
@@ -7448,7 +7190,7 @@ const ProviderCard = memo(({ provider, onSelect, userPos }: { provider: Provider
         <div className="relative">
           <div className="w-20 h-20 rounded-[1.5rem] bg-natural-surface overflow-hidden flex-shrink-0 border-2 border-white shadow-inner flex items-center justify-center">
             {provider.photo ? (
-              <img src={provider.photo} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              <img src={provider.photo} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
             ) : (
               <User className="w-8 h-8 text-natural-muted/50" />
             )}
@@ -7485,7 +7227,7 @@ const ProviderCard = memo(({ provider, onSelect, userPos }: { provider: Provider
       <div className="mt-5 flex gap-2 overflow-x-auto no-scrollbar pb-1">
         {provider.portfolio.map((img, i) => (
           <div key={i} className="w-20 h-20 rounded-2xl overflow-hidden border-2 border-natural-line flex-shrink-0 shadow-sm transition-transform group-hover:scale-105" style={{ transitionDelay: `${i * 100}ms` }}>
-            <img src={img} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+            <img src={img} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
           </div>
         ))}
       </div>
@@ -7514,39 +7256,6 @@ const CategoryButton = memo(({ icon: Icon, label, active, onClick, isTop, ...pro
     <span className={`text-[9px] font-black uppercase tracking-wider text-center leading-tight ${active ? 'text-white' : 'text-natural-heading'}`}>{label}</span>
   </button>
 ));
-
-// --- Map Logic ---
-const MapControls = ({ userPos, setMapType, mapType }: { userPos: [number, number], setMapType: (t: string) => void, mapType: string }) => {
-  const map = useMap();
-  
-  return (
-    <div className="absolute bottom-10 right-6 z-[1000] flex flex-col gap-3">
-      <button 
-        onClick={() => map.flyTo(userPos, 15)}
-        className="w-14 h-14 bg-white rounded-2xl shadow-premium border border-natural-line/50 flex items-center justify-center text-natural-heading hover:text-natural-accent transition-colors active:scale-90"
-        title="Minha Localização"
-      >
-        <MapPin className="w-6 h-6" />
-      </button>
-      <button 
-        onClick={() => setMapType(mapType === 'streets' ? 'satellite' : 'streets')}
-        className="w-14 h-14 bg-white rounded-2xl shadow-premium border border-natural-line/50 flex items-center justify-center text-natural-heading hover:text-natural-accent transition-colors active:scale-90 overflow-hidden group"
-      >
-        {mapType === 'streets' ? (
-          <div className="flex flex-col items-center">
-            <Camera className="w-5 h-5 mb-0.5" />
-            <span className="text-[7px] font-black uppercase">Sat</span>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center">
-            <LayoutGrid className="w-5 h-5 mb-0.5" />
-            <span className="text-[7px] font-black uppercase">Map</span>
-          </div>
-        )}
-      </button>
-    </div>
-  );
-};
 
 const BAIRROS_LIST = [
   "Alto Maé", "Sommerschield", "Costa do Sol", "Triunfo", "Polana Caniço", "Polana Cimento", 
@@ -7621,6 +7330,17 @@ class ErrorBoundary extends React.Component<any, any> {
 export default function App() {
   return (
     <div className="min-h-screen bg-natural-bg font-sans">
+      <Toaster
+        position="top-center"
+        toastOptions={{
+          duration: 4000,
+          style: {
+            borderRadius: '1rem',
+            fontWeight: 700,
+            fontSize: '12px',
+          },
+        }}
+      />
       <MainApp />
     </div>
   );
@@ -7683,6 +7403,12 @@ function MainApp() {
   const [inactivityFeedbacks, setInactivityFeedbacks] = useState<any[]>([]);
 
   const t = translations[lang] || translations.pt;
+  const userLocationRef = useRef(userLocation);
+  userLocationRef.current = userLocation;
+  const alertCategoryRef = useRef(alertCategory);
+  alertCategoryRef.current = alertCategory;
+  const tRef = useRef(t);
+  tRef.current = t;
   const isAdminEmail = currentUser?.email === 'fushawshaw@gmail.com' || currentUser?.email === 'wanderj419@gmail.com' || currentUser?.email === 'mozbiscates@gmail.com';
   const categories = useMemo(() => {
     if (!t) return [];
@@ -7762,10 +7488,10 @@ function MainApp() {
           const matchedCat = classifyIssueText(text);
           if (matchedCat) {
             setCategory(matchedCat);
-            alert(`🔍 ${t.categoryMatched || 'Encontrámos um profissional:'} "${matchedCat}"\n\n"${text}"`);
+            toast.success(`${t.categoryMatched || 'Encontrámos:'} "${matchedCat}"`);
           } else {
             setCategory(text);
-            alert(`🔍 ${t.noCategoryMatched || 'Pesquisando por:'} "${text}"`);
+            toast(`${t.noCategoryMatched || 'Pesquisando por:'} "${text}"`);
           }
         }
       };
@@ -7797,7 +7523,7 @@ function MainApp() {
 
   // --- USSD Client Line Simulator State & Helpers ---
   const [ussdOpen, setUssdOpen] = useState(false);
-  const [ussdScreen, setUssdScreen] = useState<'main' | 'how_it_works' | 'rules' | 'sos' | 'balance_check'>('main');
+  const [ussdScreen, setUssdScreen] = useState<'main' | 'whatsapp_link' | 'how_it_works' | 'rules' | 'sos' | 'balance_check'>('main');
   const [ussdInput, setUssdInput] = useState('');
   const [ussdError, setUssdError] = useState('');
   const [activeInfo, setActiveInfo] = useState<string | null>(null);
@@ -7806,6 +7532,9 @@ function MainApp() {
     if (lang === 'en') {
       if (ussdScreen === 'main') {
         return "Mozbiscates - Customer Support\nSelect an option:\n1. Direct Support (WhatsApp)\n2. How does payment escrow work?\n3. Community Rules & Safety\n4. Request Emergency SOS\n5. My Wallet / Balance";
+      }
+      if (ussdScreen === 'whatsapp_link') {
+        return "[Direct WhatsApp Support]\nClick the WhatsApp button below to chat directly with our support team.\n\n9. Back";
       }
       if (ussdScreen === 'how_it_works') {
         return "[How it Works]\nFunds remain in escrow. We release them to the worker only when you confirm completion.\n\n9. Back";
@@ -7823,6 +7552,9 @@ function MainApp() {
       if (ussdScreen === 'main') {
         return "Mozbiscates - Nikhavelo wa Cliente\nThanla nttina:\n1. WhatsApp Line (Moderator)\n2. Exeeni eniopoliwa musurukhu?\n3. Malamulo a Comunidade\n4. SOS wala Nikhavelo vooluluha\n5. Carteira anyu ni musurukhu";
       }
+      if (ussdScreen === 'whatsapp_link') {
+        return "[WhatsApp Line]\nTinya va WhatsApp vathi va wi muloce ni moderator.\n\n9. Othela";
+      }
       if (ussdScreen === 'how_it_works') {
         return "[Exiphika ya Garante]\nMusurukhu onnahisireya ni Garante ni onvahiwa namuteko muteko omalihiwa.\n\n9. Othela";
       }
@@ -7838,6 +7570,9 @@ function MainApp() {
     } else { // 'pt'
       if (ussdScreen === 'main') {
         return "Mozbiscates - Linha do Cliente\nEscolha uma opção:\n1. Linha Directa (WhatsApp)\n2. Como funciona o Garante?\n3. Recomendações e Regras\n4. Solicitar Ajudo / SOS urgente\n5. Consultar Carteira / Saldo";
+      }
+      if (ussdScreen === 'whatsapp_link') {
+        return "[Linha Directa WhatsApp]\nToque no botão verde abaixo para abrir a conversa directa no WhatsApp (+258 87 032 4189).\n\n9. Voltar";
       }
       if (ussdScreen === 'how_it_works') {
         return "[Como Funciona]\nO dinheiro fica seguro em conta de custódia do Garante e só é liberado ao trabalhador após validação do serviço.\n\n9. Voltar";
@@ -7861,8 +7596,8 @@ function MainApp() {
     const choice = ussdInput.trim();
     if (ussdScreen === 'main') {
       if (choice === '1') {
-        window.open('https://wa.me/258870324189', '_blank');
-        setUssdOpen(false);
+        setUssdScreen('whatsapp_link');
+        setUssdInput('');
       } else if (choice === '2') {
         setUssdScreen('how_it_works');
         setUssdInput('');
@@ -8029,33 +7764,37 @@ function MainApp() {
 
   useEffect(() => {
     const checkReminders = () => {
-      const saved = localStorage.getItem('mozbiscates-reminders');
-      if (!saved) return;
-      
-      const reminders = JSON.parse(saved);
-      const now = Date.now();
-      let changed = false;
+      try {
+        const saved = localStorage.getItem('mozbiscates-reminders');
+        if (!saved) return;
+        const reminders = JSON.parse(saved);
+        if (!Array.isArray(reminders)) return;
+        const now = Date.now();
+        let changed = false;
 
-      const updated = reminders.map((r: any) => {
-        if (!r.notified && now >= r.remindAt) {
-          sendLocalNotification(t.reminderNotice, {
-            body: `${r.jobTitle}: ${t.reminderBody}`,
-            data: { jobId: r.jobId }
-          });
-          changed = true;
-          return { ...r, notified: true };
+        const updated = reminders.map((r: any) => {
+          if (!r.notified && now >= r.remindAt) {
+            sendLocalNotification(tRef.current.reminderNotice, {
+              body: `${r.jobTitle}: ${tRef.current.reminderBody}`,
+              data: { jobId: r.jobId }
+            });
+            changed = true;
+            return { ...r, notified: true };
+          }
+          return r;
+        });
+
+        if (changed) {
+          localStorage.setItem('mozbiscates-reminders', JSON.stringify(updated));
         }
-        return r;
-      });
-
-      if (changed) {
-        localStorage.setItem('mozbiscates-reminders', JSON.stringify(updated));
+      } catch {
+        // Ignore malformed localStorage reminders
       }
     };
 
     const interval = setInterval(checkReminders, 10000);
     return () => clearInterval(interval);
-  }, [t]);
+  }, []);
 
   useEffect(() => {
     if (view === 'app') {
@@ -8610,13 +8349,13 @@ function MainApp() {
           category: String(docData.category || docData.specialty || 'Serviços Gerais')
         } as Provider;
         if (p.verified && (change.type === 'added' || change.type === 'modified')) {
-          checkAndNotifyNearbyProvider(p, userLocation, isFirstProvidersSyncRef.current);
+          checkAndNotifyNearbyProvider(p, userLocationRef.current, isFirstProvidersSyncRef.current);
         }
       });
       isFirstProvidersSyncRef.current = false;
     }, (err) => handleFirestoreError(err, OperationType.LIST, 'users'));
     return () => unsubscribe();
-  }, [currentUser?.uid, role, userLocation, checkAndNotifyNearbyProvider]);
+  }, [currentUser?.uid, role, checkAndNotifyNearbyProvider]);
 
   // Periodic background check every 20 seconds for verified providers within 5km as GPS location evolves
   useEffect(() => {
@@ -8625,13 +8364,13 @@ function MainApp() {
     const interval = setInterval(() => {
       rawProviders.forEach((p) => {
         if (p.verified) {
-          checkAndNotifyNearbyProvider(p, userLocation, false);
+          checkAndNotifyNearbyProvider(p, userLocationRef.current, false);
         }
       });
     }, 20000);
 
     return () => clearInterval(interval);
-  }, [role, rawProviders, userLocation, checkAndNotifyNearbyProvider]);
+  }, [role, rawProviders, checkAndNotifyNearbyProvider]);
 
   // Listen for notification click events to automatically open provider profile
   useEffect(() => {
@@ -8857,20 +8596,23 @@ function MainApp() {
 
             if (change.type === 'added') {
               previousJobStatusesRef.current[jobId] = job.status;
-              if (alertCategory === 'Todos' || job.category?.includes(alertCategory)) {
+              const currentAlertCat = alertCategoryRef.current;
+              const currentT = tRef.current;
+              if (currentAlertCat === 'Todos' || job.category?.includes(currentAlertCat)) {
                 setNotification({
-                  title: t.notificationTitle,
-                  body: `${t.notificationBody}: ${job.category} - ${job.amount} MT`
+                  title: currentT.notificationTitle,
+                  body: `${currentT.notificationBody}: ${job.category} - ${job.amount} MT`
                 });
                 setTimeout(() => setNotification(null), 5000);
               }
             } else if (change.type === 'modified') {
               // DETECT IF CLIENT CONFIRMED THE FINISHED SERVICE!
               if (job.status === 'CONCLUIDO' && prevStatus && prevStatus !== 'CONCLUIDO') {
+                const currentT = tRef.current;
                 const fee = (job.amount || 0) * 0.05;
                 const netAmount = Math.round(job.payoutAmount ?? ((job.amount || 0) - fee));
-                const title = t.payoutCreditedTitle || "Saldo Creditado! 💰🎉";
-                const body = `${t.payoutCreditedBody || "O cliente confirmou o serviço finalizado. O seu saldo foi creditado com sucesso!"} (+${netAmount} MT • ${job.category})`;
+                const title = currentT.payoutCreditedTitle || "Saldo Creditado! 💰🎉";
+                const body = `${currentT.payoutCreditedBody || "O cliente confirmou o serviço finalizado. O seu saldo foi creditado com sucesso!"} (+${netAmount} MT • ${job.category})`;
 
                 // 1. Web Push Notification to device / browser
                 sendLocalNotification(title, {
@@ -8904,7 +8646,7 @@ function MainApp() {
       setJobs(data);
     }, (err) => handleFirestoreError(err, OperationType.LIST, 'jobs'));
     return () => unsubscribe();
-  }, [currentUser, role, alertCategory, t]);
+  }, [currentUser?.uid, role]);
 
   // Listen to Open Pedidos available in the marketplace so Workers can browse & accept
   useEffect(() => {
@@ -9526,13 +9268,15 @@ function MainApp() {
           <h1 className="font-black italic text-xl">Mozbiscates</h1>
           <button onClick={handleLogout} className="text-natural-muted font-black text-[10px] uppercase">{t.logout || 'Sair'}</button>
         </header>
-        <ClientSecurityProfileModal
-          initialData={combinedUserData}
-          onSave={handleCreateClientProfile}
-          isMandatory={true}
-          isManager={isManager}
-          isDemoAccount={isDemoAccount}
-        />
+        <Suspense fallback={<div className="p-8 text-center text-xs font-bold text-natural-muted">A carregar perfil...</div>}>
+          <ClientSecurityProfileModal
+            initialData={combinedUserData}
+            onSave={handleCreateClientProfile}
+            isMandatory={true}
+            isManager={isManager}
+            isDemoAccount={isDemoAccount}
+          />
+        </Suspense>
       </div>
     );
   }
@@ -9542,37 +9286,47 @@ function MainApp() {
       <PwaGuideModal onShow={showPwaGuide} onClose={() => setShowPwaGuide(false)} />
 
       {/* Alarme de Emergência Anti-Crime SOS (Para Ambos os Lados) */}
-      <EmergencyModal 
-        isOpen={showEmergencyModal}
-        onClose={() => {
-          setShowEmergencyModal(false);
-          setActiveEmergencyJob(null);
-        }}
-        currentUser={currentUser}
-        userData={combinedUserData}
-        activeJob={activeEmergencyJob}
-      />
+      {showEmergencyModal && (
+        <Suspense fallback={null}>
+          <EmergencyModal 
+            isOpen={showEmergencyModal}
+            onClose={() => {
+              setShowEmergencyModal(false);
+              setActiveEmergencyJob(null);
+            }}
+            currentUser={currentUser}
+            userData={combinedUserData}
+            activeJob={activeEmergencyJob}
+          />
+        </Suspense>
+      )}
 
       {/* Modal de Cadastro de Segurança do Cliente (Edição) */}
       {showClientProfileModal && (
-        <ClientSecurityProfileModal
-          initialData={combinedUserData}
-          onSave={handleCreateClientProfile}
-          onCancel={() => setShowClientProfileModal(false)}
-          isMandatory={false}
-          isManager={isManager}
-          isDemoAccount={isDemoAccount}
-        />
+        <Suspense fallback={null}>
+          <ClientSecurityProfileModal
+            initialData={combinedUserData}
+            onSave={handleCreateClientProfile}
+            onCancel={() => setShowClientProfileModal(false)}
+            isMandatory={false}
+            isManager={isManager}
+            isDemoAccount={isDemoAccount}
+          />
+        </Suspense>
       )}
 
       {/* Modal Obrigatório de Registo de WhatsApp para Contacto Direto e Formulários */}
-      <MandatoryWhatsAppModal
-        isOpen={Boolean(currentUser && role && (!combinedUserData?.phone || !isValidMozPhone(cleanPhone(combinedUserData.phone))))}
-        userRole={role}
-        userName={combinedUserData?.fullName}
-        currentPhone={combinedUserData?.phone}
-        onSavePhone={handleSaveMandatoryPhone}
-      />
+      {Boolean(currentUser && role && (!combinedUserData?.phone || !isValidMozPhone(cleanPhone(combinedUserData.phone)))) && (
+        <Suspense fallback={null}>
+          <MandatoryWhatsAppModal
+            isOpen={true}
+            userRole={role}
+            userName={combinedUserData?.fullName}
+            currentPhone={combinedUserData?.phone}
+            onSavePhone={handleSaveMandatoryPhone}
+          />
+        </Suspense>
+      )}
 
       {/* Formulário Oficial de Inactividade e Melhoria ("Queremos melhorar! 💙") */}
       <InactivityFeedbackModal
@@ -9647,6 +9401,18 @@ function MainApp() {
                       <div className="text-red-600 text-[10px] font-black uppercase tracking-wide mt-2">
                         {ussdError}
                       </div>
+                    )}
+                    {ussdScreen === 'whatsapp_link' && (
+                      <a
+                        href="https://wa.me/258870324189"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={() => setUssdOpen(false)}
+                        className="mt-3 w-full bg-[#25D366] hover:bg-[#20ba59] text-white py-3 px-4 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 shadow-md transition-all"
+                      >
+                        <MessageCircle className="w-4 h-4 fill-white" />
+                        <span>Abrir WhatsApp Agora</span>
+                      </a>
                     )}
                   </div>
 
@@ -9973,21 +9739,23 @@ function MainApp() {
         </nav>
 
         {tab === 'profile' ? (
-          <UserProfileView
-            currentUser={currentUser}
-            userData={combinedUserData}
-            role={role}
-            isManager={isManager}
-            isDemoAccount={isDemoAccount}
-            balance={balance}
-            jobsCount={jobs.length}
-            lang={lang}
-            setLang={setLang}
-            t={t}
-            onSaveProfile={handleUpdateUserProfile}
-            onSwitchRole={() => setView('roles')}
-            onLogout={handleLogout}
-          />
+          <Suspense fallback={<div className="p-10 text-center text-xs font-bold text-natural-muted">A carregar perfil...</div>}>
+            <UserProfileView
+              currentUser={currentUser}
+              userData={combinedUserData}
+              role={role}
+              isManager={isManager}
+              isDemoAccount={isDemoAccount}
+              balance={balance}
+              jobsCount={jobs.length}
+              lang={lang}
+              setLang={setLang}
+              t={t}
+              onSaveProfile={handleUpdateUserProfile}
+              onSwitchRole={() => setView('roles')}
+              onLogout={handleLogout}
+            />
+          </Suspense>
         ) : tab === 'explore' ? (
           <div className="flex-1 animate-in fade-in slide-in-from-bottom-4 duration-300">
              {role !== 'worker' ? (
@@ -10123,14 +9891,16 @@ function MainApp() {
 
                   {exploreViewMode === 'map' && (
                     <div className="mb-10 animate-in fade-in zoom-in-95 duration-500">
-                      <MapView 
-                        providers={role === 'client' ? filteredProviders : []} 
-                        jobs={role === 'worker' ? jobs : []} 
-                        userPos={userLocation} 
-                        t={t} 
-                        selectedProvider={selectedProvider}
-                        onSelectProvider={handleSelectProvider}
-                      />
+                      <Suspense fallback={<div className="w-full h-[65vh] rounded-[3rem] bg-white border-2 border-natural-line flex items-center justify-center text-xs font-black uppercase text-natural-muted">A carregar mapa interactivo...</div>}>
+                        <MapView 
+                          providers={role === 'client' ? filteredProviders : []} 
+                          jobs={role === 'worker' ? jobs : []} 
+                          userPos={userLocation} 
+                          t={t} 
+                          selectedProvider={selectedProvider}
+                          onSelectProvider={handleSelectProvider}
+                        />
+                      </Suspense>
                     </div>
                   )}
 
@@ -10289,7 +10059,9 @@ function MainApp() {
                      t={t} 
                    />
                  ) : role === 'admin' && adminView === 'alerts' ? (
-                   <AdminEmergencyMonitor alerts={emergencyAlerts} />
+                   <Suspense fallback={<div className="p-8 text-center text-xs font-bold text-natural-muted">A carregar monitor SOS...</div>}>
+                     <AdminEmergencyMonitor alerts={emergencyAlerts} />
+                   </Suspense>
                   ) : (
                    <div className="space-y-6">
                      {/* Secção de Pedidos Abertos para o Biscateiro aceitar */}
@@ -10539,7 +10311,7 @@ function MainApp() {
                   <div className="relative">
                     <div className="w-24 h-24 rounded-[2rem] bg-white overflow-hidden border-2 border-natural-line shadow-md flex items-center justify-center">
                       {selectedProvider.photo ? (
-                        <img src={selectedProvider.photo} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        <img src={selectedProvider.photo} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                       ) : (
                         <User className="w-10 h-10 text-natural-muted/50" />
                       )}
@@ -10558,12 +10330,12 @@ function MainApp() {
                           const shareUrl = `${window.location.origin}${window.location.pathname}?workerId=${selectedProvider.id}`;
                           if (navigator.clipboard) {
                             navigator.clipboard.writeText(shareUrl).then(() => {
-                              alert("Link do perfil copiado com sucesso!");
+                              toast.success("Link do perfil copiado com sucesso!");
                             }).catch(() => {
-                              alert(`Link do perfil: ${shareUrl}`);
+                              toast(`Link do perfil: ${shareUrl}`);
                             });
                           } else {
-                            alert(`Link do perfil: ${shareUrl}`);
+                            toast(`Link do perfil: ${shareUrl}`);
                           }
                         }}
                         className="p-2.5 bg-natural-surface rounded-2xl border border-natural-line hover:bg-natural-accent hover:text-white transition-all active:scale-90"
@@ -10646,11 +10418,11 @@ function MainApp() {
                       {selectedProvider.portfolio.map((p, idx) => (
                         <div key={idx} className="shrink-0 w-48 space-y-2">
                            <div className="relative h-32 rounded-2xl overflow-hidden border border-natural-line">
-                              <img src={p.after} className="w-full h-full object-cover" />
+                              <img src={p.after} loading="lazy" decoding="async" className="w-full h-full object-cover" />
                               <div className="absolute bottom-2 right-2 bg-natural-success/90 text-white text-[8px] font-black px-2 py-1 rounded">{t.after}</div>
                            </div>
                            <div className="relative h-20 rounded-xl overflow-hidden border border-natural-line grayscale opacity-60">
-                              <img src={p.before} className="w-full h-full object-cover" />
+                              <img src={p.before} loading="lazy" decoding="async" className="w-full h-full object-cover" />
                               <div className="absolute bottom-2 right-2 bg-natural-heading/90 text-white text-[8px] font-black px-2 py-1 rounded">{t.before}</div>
                            </div>
                         </div>

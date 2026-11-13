@@ -31,6 +31,17 @@ export const db = initializeFirestore(app, {
 }, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 
+// Validação silenciosa de conectividade ao Firestore no arranque
+(async function testFirestoreConnection() {
+  try {
+    await getDocFromServer(doc(db, '_connection_test_', 'ping'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.warn('Firestore offline: verifique a ligação à internet ou configuração.');
+    }
+  }
+})();
+
 export const ADMIN_EMAILS = [
   'fushawshaw@gmail.com',
   'wanderj419@gmail.com',
@@ -506,17 +517,4 @@ export async function provisionDemoAccount(
   }
 }
 
-// Connectivity check with detailed logging
-async function checkFirestoreConnection() {
-  try {
-    const testDoc = doc(db, '_connection_test_', 'ping');
-    await getDocFromServer(testDoc);
-    console.log("✅ Firestore connected successfully");
-  } catch (error: any) {
-    console.warn("⚠️ Firestore connection notice:", error.message);
-    if (error.code === 'unavailable') {
-      console.error("Critical: Firestore is currently unreachable. Retrying in background...");
-    }
-  }
-}
-checkFirestoreConnection();
+export {};
