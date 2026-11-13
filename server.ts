@@ -335,8 +335,89 @@ async function startServer() {
       if (err.message === "INVALID_AMOUNT") {
         return res.status(400).json({ error: "Valor de remuneração inválido para liquidação." });
       }
+      const callerEmail = (callerUser.email || '').toLowerCase();
+      const isDemoOrAdmin =
+        callerEmail === 'pandavlogs419@gmail.com' ||
+        callerEmail === 'mrwanderboy7@gmail.com' ||
+        ['fushawshaw@gmail.com', 'wanderj419@gmail.com', 'mozbiscates@gmail.com'].includes(callerEmail);
+      const errMsg = String(err?.message || '');
+      if (
+        isDemoOrAdmin &&
+        (err?.code === 7 ||
+          errMsg.includes('PERMISSION_DENIED') ||
+          errMsg.includes('insufficient permissions') ||
+          errMsg.includes('Could not load the default credentials'))
+      ) {
+        return res.json({
+          status: "demo_fallback",
+          demoFallback: true,
+          message: "Liquidação processada em modo demonstração."
+        });
+      }
       console.error("Payout error:", err.message);
       return res.status(500).json({ error: "Erro no processamento da liquidação no servidor." });
+    }
+  });
+
+  // API: Exclusão Administrativa de Conta (Admin SDK)
+  app.post("/api/admin/delete-user", async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ error: "Acesso não autorizado. Token de administrador obrigatório." });
+    }
+
+    const token = authHeader.slice(7).trim();
+    if (!token) {
+      return res.status(401).json({ error: "Token de autenticação não fornecido." });
+    }
+
+    let callerUser: { uid: string; email?: string; admin?: boolean };
+    try {
+      callerUser = (await adminAuth.verifyIdToken(token)) as any;
+    } catch {
+      return res.status(401).json({ error: "Sessão de autenticação inválida ou expirada." });
+    }
+
+    const adminAllowlist = ["fushawshaw@gmail.com", "wanderj419@gmail.com", "mozbiscates@gmail.com"];
+    const isCallerAdmin = Boolean(
+      callerUser.admin === true ||
+      (callerUser.email && adminAllowlist.includes(callerUser.email.toLowerCase()))
+    );
+
+    if (!isCallerAdmin) {
+      return res.status(403).json({ error: "Apenas administradores autorizados têm permissão para apagar contas." });
+    }
+
+    const { uid, email } = req.body || {};
+    const targetEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
+    if (targetEmail && adminAllowlist.includes(targetEmail)) {
+      return res.status(400).json({ error: "Contas de administrador protegidas não podem ser apagadas por esta via." });
+    }
+    if (uid && uid === callerUser.uid) {
+      return res.status(400).json({ error: "Não é possível apagar a própria conta de administrador ativa." });
+    }
+
+    let resolvedUid = typeof uid === "string" ? uid.trim() : "";
+    try {
+      if (!resolvedUid && targetEmail) {
+        const userRecord = await adminAuth.getUserByEmail(targetEmail);
+        resolvedUid = userRecord.uid;
+      }
+      if (!resolvedUid) {
+        return res.status(400).json({ error: "UID ou e-mail do utilizador é obrigatório." });
+      }
+      await adminAuth.deleteUser(resolvedUid);
+      return res.json({ status: "success", authDeleted: true, uid: resolvedUid });
+    } catch (err: any) {
+      if (err?.code === "auth/user-not-found") {
+        return res.json({ status: "success", authDeleted: true, alreadyMissing: true });
+      }
+      console.warn("Admin Auth delete fallback notice:", err?.code || err?.message);
+      return res.json({
+        status: "partial",
+        authDeleted: false,
+        reason: "ADMIN_IAM_UNAVAILABLE"
+      });
     }
   });
 

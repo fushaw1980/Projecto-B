@@ -76,7 +76,9 @@ import {
   UserCheck,
   UserX,
   MessageSquareHeart,
-  MessageCircle
+  MessageCircle,
+  Trash2,
+  UserCog
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { motion, AnimatePresence } from 'motion/react';
@@ -136,10 +138,20 @@ import {
 import {
   auth,
   db,
+  ADMIN_EMAILS,
+  isAuthorizedAdminEmail,
   DEMO_ACCOUNTS,
   getDemoAccountConfig,
   isDemoPresentationEmail,
-  provisionDemoAccount
+  provisionDemoAccount,
+  deleteAccountAuthWithPassword,
+  adminWipeUserFirestore,
+  adminResetUserAsDemo,
+  saveDemoSessionPassword,
+  getDemoSessionPassword,
+  clearDemoSessionPassword,
+  switchDemoAccount,
+  settleDemoJobClientFallback
 } from './lib/firebase';
 
 // --- Types ---
@@ -553,10 +565,14 @@ interface Job {
   description?: string;
   bookingType?: string;
   scheduledFor?: string;
+  workerAccepted?: boolean;
+  acceptedAt?: any;
   status: string;
   transactionId?: string;
   payoutAmount?: number;
+  platformFee?: number;
   payoutTransactionId?: string;
+  completedAt?: any;
   photoBefore?: string;
   photoAfter?: string;
   panicAlert?: boolean;
@@ -720,6 +736,7 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
   const [txId, setTxId] = useState('');
   const [error, setError] = useState('');
   const [lastWithdrawalSummary, setLastWithdrawalSummary] = useState<{ rawAmt: number, fee: number, netAmt: number }>({ rawAmt: 0, fee: 0, netAmt: 0 });
+  const [recentTransactions, setRecentTransactions] = useState<any[]>([]);
 
   // 3% withdrawal fee
   const WITHDRAWAL_FEE_RATE = 0.03;
@@ -734,6 +751,27 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
       setWithdrawPhone(clean.startsWith('258') ? clean.slice(3) : clean);
     }
   }, [userData]);
+
+  // Listen to recent wallet transactions
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      setRecentTransactions([]);
+      return;
+    }
+    const q = query(
+      collection(db, 'users', currentUser.uid, 'transactions'),
+      orderBy('createdAt', 'desc'),
+      limit(6)
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        setRecentTransactions(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      },
+      () => {}
+    );
+    return () => unsub();
+  }, [currentUser?.uid]);
 
   const handleWithdraw = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -789,8 +827,24 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
       }
       const userRef = doc(db, 'users', currentUser.uid);
       await updateDoc(userRef, {
-        balance: increment(-amt)
+        balance: increment(-amt),
+        updatedAt: serverTimestamp(),
+        lastActiveAt: serverTimestamp()
       });
+
+      if (isDemoPresentationEmail(currentUser?.email)) {
+        await setDoc(doc(db, 'users', currentUser.uid, 'transactions', generatedTxId), {
+          id: generatedTxId,
+          type: 'WITHDRAWAL',
+          grossAmount: amt,
+          fee: calculatedFee,
+          netAmount: netPayout,
+          wallet: withdrawWallet,
+          phone: cleanPhone,
+          description: `Levantamento ${withdrawWallet === 'emola' ? 'e-Mola' : 'M-Pesa'} (+258 ${cleanPhone})`,
+          createdAt: serverTimestamp()
+        }).catch(() => {});
+      }
     } catch (err) {
       console.error("Error updating balance during withdrawal:", err);
       setError("Erro ao atualizar o saldo no servidor.");
@@ -885,6 +939,30 @@ const WorkerWallet = ({ t, balance, userData, db, currentUser }: { t: any, balan
         <p className="text-[9px] font-bold text-natural-muted mt-4 italic leading-tight">
           * Os pagamentos são acumulados no seu saldo. Terá a opção de levantar com taxa de apenas 3% assim que concluir biscates.
         </p>
+      )}
+
+      {recentTransactions.length > 0 && (
+        <div className="mt-4 pt-3 border-t border-natural-line relative z-10 space-y-2">
+          <p className="text-[9px] font-black uppercase tracking-widest text-natural-muted">
+            Últimos Movimentos da Carteira
+          </p>
+          <div className="space-y-1.5">
+            {recentTransactions.map((tx) => {
+              const isCredit = tx.type === 'CREDIT_PAYOUT';
+              return (
+                <div key={tx.id} className="flex items-center justify-between gap-2 bg-natural-surface/60 px-3 py-2 rounded-xl border border-natural-line/70 text-[10px]">
+                  <div className="min-w-0">
+                    <p className="font-bold text-natural-heading truncate">{tx.description || (isCredit ? 'Crédito Escrow' : 'Levantamento')}</p>
+                    <p className="font-mono text-[8px] text-natural-muted truncate">#{tx.id} • Taxa: {tx.fee || 0} MT</p>
+                  </div>
+                  <span className={`font-black font-mono shrink-0 ${isCredit ? 'text-emerald-700' : 'text-red-600'}`}>
+                    {isCredit ? `+${tx.netAmount}` : `-${tx.grossAmount}`} MT
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       )}
 
       {/* Withdrawal Modal */}
@@ -2469,7 +2547,7 @@ const JobReminder = memo(({ jobId, jobTitle, t }: { jobId: string, jobTitle: str
   );
 });
 
-const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt', onPanic }: { job: Job, role: string, onAction: (j: Job, a: string, d?: any) => void, t: any, currentUser: any, lang?: string, onPanic?: (job: Job) => void }) => {
+const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt', onPanic, isDemoAccount = false, userPhone = '' }: { job: Job, role: string, onAction: (j: Job, a: string, d?: any) => void, t: any, currentUser: any, lang?: string, onPanic?: (job: Job) => void, isDemoAccount?: boolean, userPhone?: string }) => {
   const [txId, setTxId] = useState('');
   const [showChat, setShowChat] = useState(false);
   const [showReview, setShowReview] = useState(false);
@@ -2485,6 +2563,16 @@ const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt', onPani
   const [pushError, setPushError] = useState('');
   const [paymentSuccess, setPaymentSuccess] = useState(false);
   const [showQrScanner, setShowQrScanner] = useState(false);
+
+  useEffect(() => {
+    if (!paymentPhone && userPhone) {
+      const digits = userPhone.replace(/\D/g, '');
+      const local = digits.startsWith('258') ? digits.slice(3) : digits;
+      if (local.length >= 9) {
+        setPaymentPhone(local.slice(0, 9));
+      }
+    }
+  }, [userPhone, paymentPhone]);
 
   // Quick Reschedule & Cancellation for Unforeseen Events
   const [showRescheduleModal, setShowRescheduleModal] = useState(false);
@@ -2617,9 +2705,71 @@ const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt', onPani
         </button>
       )}
 
+      {/* --- Worker: Aceitar Pedido (Aberto ou Directo) --- */}
+      {role === 'worker' && job.status === 'AGUARDANDO_DEPOSITO' && (
+        <div className="mb-4">
+          {job.providerId === 'OPEN' || !job.workerAccepted ? (
+            <div className="bg-emerald-50 border-2 border-emerald-200 p-4 rounded-2xl space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800">
+                  {job.providerId === 'OPEN' ? '📢 Pedido Aberto na Rede' : '📩 Novo Pedido Directo'}
+                </span>
+                {job.bairro && (
+                  <span className="text-[9px] font-bold text-emerald-700 bg-white px-2 py-0.5 rounded-full border border-emerald-200">
+                    {job.bairro}
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] font-bold text-emerald-900 leading-snug">
+                {job.providerId === 'OPEN'
+                  ? 'Aceite este biscate para assumir o serviço e notificar o cliente para avançar com o pagamento.'
+                  : 'Confirme a sua disponibilidade para este serviço antes do depósito Escrow.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => onAction(job, 'ACCEPT_JOB')}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white font-black py-3.5 rounded-2xl text-xs uppercase tracking-widest shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>Aceitar Este Pedido</span>
+              </button>
+            </div>
+          ) : (
+            <div className="bg-emerald-50/70 border border-emerald-200 px-4 py-3 rounded-2xl flex items-center gap-2 text-[11px] font-bold text-emerald-800">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>Pedido aceite por si! A aguardar o pagamento Escrow do cliente.</span>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* --- Client: Submit ID (Automated STK Push & Manual tabs) --- */}
       {role === 'client' && job.status === 'AGUARDANDO_DEPOSITO' && (
         <div className="space-y-4">
+          <div className={`px-3.5 py-2.5 rounded-2xl border text-[11px] font-bold flex items-center gap-2 ${
+            job.workerAccepted
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : job.providerId === 'OPEN'
+                ? 'bg-amber-50 border-amber-200 text-amber-900'
+                : 'bg-natural-surface border-natural-line text-natural-muted'
+          }`}>
+            {job.workerAccepted ? (
+              <>
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Aceite por <strong>{job.providerName || 'Biscateiro'}</strong>! Simule o pagamento abaixo para iniciar.</span>
+              </>
+            ) : job.providerId === 'OPEN' ? (
+              <>
+                <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>Pedido Aberto publicado — aguarda aceitação do biscateiro (ou pague já em Escrow).</span>
+              </>
+            ) : (
+              <>
+                <Clock className="w-4 h-4 text-natural-accent shrink-0" />
+                <span>Enviado a <strong>{job.providerName || 'Biscateiro'}</strong> — pode aguardar aceitação ou já depositar.</span>
+              </>
+            )}
+          </div>
           {/* Payment Method Tabs */}
           <div className="grid grid-cols-2 gap-2 p-1 bg-natural-surface rounded-2xl border border-natural-line">
             <button
@@ -2799,6 +2949,18 @@ const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt', onPani
                           setPushError('');
                         }}
                       />
+                      {isDemoAccount && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPushPin('1234');
+                            setPushError('');
+                          }}
+                          className="mt-2 w-full py-1.5 px-3 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-900 text-[10px] font-black uppercase tracking-wider transition-colors"
+                        >
+                          Preencher PIN Demo (1234)
+                        </button>
+                      )}
                       {pushError && (
                         <p className="text-[9px] font-black text-red-500 mt-1 text-center">{pushError}</p>
                       )}
@@ -2903,17 +3065,27 @@ const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt', onPani
         </div>
       )}
 
-      {/* --- Admin: Validate --- */}
-      {role === 'admin' && job.status === 'VALIDACAO_PENDENTE' && (
+      {/* --- Admin / Demo: Validate --- */}
+      {job.status === 'VALIDACAO_PENDENTE' && (role === 'admin' || (role === 'client' && isDemoAccount)) && (
         <div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 space-y-3">
           <p className="text-xs font-bold text-orange-800 uppercase">{t.validateTransaction}</p>
           <p className="font-mono text-sm bg-white p-3 rounded-xl border border-orange-200">{job.transactionId}</p>
-          <button 
-            onClick={() => onAction(job, 'ADMIN_APPROVE')}
-            className="w-full bg-natural-accent text-white font-black py-4 rounded-2xl"
-          >
-            {t.approvePayment}
-          </button>
+          {role === 'admin' ? (
+            <button 
+              onClick={() => onAction(job, 'ADMIN_APPROVE')}
+              className="w-full bg-natural-accent text-white font-black py-4 rounded-2xl"
+            >
+              {t.approvePayment}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onAction(job, 'DEMO_APPROVE_PAYMENT')}
+              className="w-full bg-natural-accent text-white font-black py-3.5 rounded-2xl text-xs uppercase tracking-wider"
+            >
+              ⚡ Simular Aprovação Admin (Demo)
+            </button>
+          )}
         </div>
       )}
 
@@ -2962,7 +3134,6 @@ const JobCard = memo(({ job, role, onAction, t, currentUser, lang = 'pt', onPani
             onScanSuccess={() => {
               setShowQrScanner(false);
               onAction(job, 'CHECK_IN');
-              alert(t.scanSuccess);
             }}
             jobId={job.id}
             t={t}
@@ -3994,6 +4165,162 @@ const AdminMetrics = memo(({
   const [retentionSubTab, setRetentionSubTab] = useState<'actives' | 'inactives' | 'all' | 'overview' | 'feedbacks'>('actives');
   const [userSearchTerm, setUserSearchTerm] = useState('');
   const [userRoleFilter, setUserRoleFilter] = useState<'all' | 'worker' | 'client'>('all');
+  const [managingUser, setManagingUser] = useState<any | null>(null);
+  const [adminDeleteJobs, setAdminDeleteJobs] = useState(true);
+  const [adminOldPass, setAdminOldPass] = useState('');
+  const [adminActionLoading, setAdminActionLoading] = useState(false);
+  const [adminActionMsg, setAdminActionMsg] = useState<{ type: 'success' | 'error' | 'info'; text: string; pendingResetEmail?: string } | null>(null);
+
+  const handleAdminToggleVerify = async (u: any) => {
+    const uid = u.id || u.uid;
+    if (!uid) return;
+    setAdminActionLoading(true);
+    try {
+      const nextVal = !u.verified;
+      await updateDoc(doc(db, 'users', uid), {
+        verified: nextVal,
+        updatedAt: serverTimestamp()
+      });
+      setManagingUser((prev: any) => (prev ? { ...prev, verified: nextVal } : prev));
+      setAdminActionMsg({
+        type: 'success',
+        text: `Conta ${u.email || uid} marcada como ${nextVal ? 'Verificada' : 'Não verificada'}.`
+      });
+    } catch (err: any) {
+      setAdminActionMsg({ type: 'error', text: err?.message || 'Erro ao atualizar verificação.' });
+    } finally {
+      setAdminActionLoading(false);
+    }
+  };
+
+  const handleAdminSwitchRole = async (u: any, nextRole: 'worker' | 'client') => {
+    const uid = u.id || u.uid;
+    if (!uid) return;
+    setAdminActionLoading(true);
+    try {
+      await updateDoc(doc(db, 'users', uid), {
+        role: nextRole,
+        ...(nextRole === 'worker' && !u.category ? { category: 'Electricista Profissional', specialty: 'Electricista Profissional' } : {}),
+        updatedAt: serverTimestamp()
+      });
+      setManagingUser((prev: any) => (prev ? { ...prev, role: nextRole } : prev));
+      setAdminActionMsg({
+        type: 'success',
+        text: `Papel de ${u.email || uid} alterado para ${nextRole === 'worker' ? 'Biscateiro' : 'Cliente'}.`
+      });
+    } catch (err: any) {
+      setAdminActionMsg({ type: 'error', text: err?.message || 'Erro ao alterar papel.' });
+    } finally {
+      setAdminActionLoading(false);
+    }
+  };
+
+  const handleAdminResetToDemo = async (u: any) => {
+    const uid = u.id || u.uid;
+    if (!uid) return;
+    setAdminActionLoading(true);
+    try {
+      const emailLower = (u.email || '').trim().toLowerCase();
+      const targetDemo =
+        emailLower === DEMO_ACCOUNTS.client.email ? DEMO_ACCOUNTS.client : DEMO_ACCOUNTS.worker;
+      await adminResetUserAsDemo(uid, targetDemo);
+      setManagingUser(null);
+      setAdminActionMsg({
+        type: 'success',
+        text: `Dados antigos de ${u.email || uid} limpos e perfil convertido para Conta Demo (${targetDemo.role === 'worker' ? 'Biscateiro' : 'Cliente'})!`
+      });
+    } catch (err: any) {
+      setAdminActionMsg({ type: 'error', text: err?.message || 'Erro ao reiniciar conta como demo.' });
+    } finally {
+      setAdminActionLoading(false);
+    }
+  };
+
+  const handleAdminDeleteUserAccount = async (u: any) => {
+    const uid = u.id || u.uid;
+    const targetEmail = (u.email || '').trim().toLowerCase();
+    if (!uid) return;
+    if (isAuthorizedAdminEmail(targetEmail)) {
+      setAdminActionMsg({ type: 'error', text: 'Contas de administrador protegidas não podem ser apagadas.' });
+      return;
+    }
+
+    setAdminActionLoading(true);
+    try {
+      const wipeRes = await adminWipeUserFirestore(uid, { deleteJobs: adminDeleteJobs });
+      let authDeleted = false;
+
+      if (adminOldPass.trim() && targetEmail) {
+        try {
+          await deleteAccountAuthWithPassword(targetEmail, adminOldPass.trim());
+          authDeleted = true;
+        } catch (authPassErr: any) {
+          setAdminActionMsg({
+            type: 'error',
+            text: `Dados do Firestore apagados (${wipeRes.deletedDocs} registos), mas falhou ao apagar o login: ${authPassErr?.message || 'Senha incorreta'}`
+          });
+          setManagingUser(null);
+          setAdminOldPass('');
+          setAdminActionLoading(false);
+          return;
+        }
+      }
+
+      if (!authDeleted) {
+        try {
+          const token = await auth.currentUser?.getIdToken();
+          const apiRes = await fetch('/api/admin/delete-user', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token || ''}`
+            },
+            body: JSON.stringify({ uid, email: targetEmail })
+          });
+          const apiData = await apiRes.json();
+          if (apiData?.authDeleted) {
+            authDeleted = true;
+          }
+        } catch {
+          // Ignore network fallback error; handled gracefully below
+        }
+      }
+
+      setManagingUser(null);
+      setAdminOldPass('');
+      if (authDeleted) {
+        setAdminActionMsg({
+          type: 'success',
+          text: `Conta ${targetEmail || uid} apagada por completo (Firestore + Firebase Auth, ${wipeRes.deletedDocs} registos e ${wipeRes.deletedJobs} biscates removidos). Já pode recriá-la como Demo!`
+        });
+      } else {
+        setAdminActionMsg({
+          type: 'info',
+          text: `Todos os dados da conta ${targetEmail || uid} foram apagados do Firestore (${wipeRes.deletedDocs} registos, ${wipeRes.deletedJobs} biscates). Para apagar ou redefinir também a senha antiga no login, envie um link de redefinição para o e-mail ou use a senha antiga no ecrã de Login.`,
+          pendingResetEmail: targetEmail || undefined
+        });
+      }
+    } catch (err: any) {
+      setAdminActionMsg({ type: 'error', text: err?.message || 'Erro ao apagar conta no Firestore.' });
+    } finally {
+      setAdminActionLoading(false);
+    }
+  };
+
+  const handleAdminSendResetEmail = async (targetEmail: string) => {
+    setAdminActionLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, targetEmail.trim().toLowerCase());
+      setAdminActionMsg({
+        type: 'success',
+        text: `Link oficial de redefinição de palavra-passe enviado para ${targetEmail}! Após definir a nova senha no e-mail, basta clicar em "Criar / Ativar 2 Contas Demo".`
+      });
+    } catch (err: any) {
+      setAdminActionMsg({ type: 'error', text: err?.message || 'Erro ao enviar e-mail de redefinição.' });
+    } finally {
+      setAdminActionLoading(false);
+    }
+  };
 
   const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 
@@ -5110,6 +5437,40 @@ const AdminMetrics = memo(({
                   </span>
                 </div>
 
+                {adminActionMsg && (
+                  <div
+                    className={`p-3.5 rounded-2xl text-xs font-bold flex flex-col sm:flex-row sm:items-center justify-between gap-2 border ${
+                      adminActionMsg.type === 'success'
+                        ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                        : adminActionMsg.type === 'error'
+                          ? 'bg-red-50 text-red-800 border-red-200'
+                          : 'bg-blue-50 text-blue-900 border-blue-200'
+                    }`}
+                  >
+                    <span>{adminActionMsg.text}</span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {adminActionMsg.pendingResetEmail && (
+                        <button
+                          type="button"
+                          onClick={() => handleAdminSendResetEmail(adminActionMsg.pendingResetEmail!)}
+                          disabled={adminActionLoading}
+                          className="px-3 py-1.5 rounded-xl bg-blue-700 text-white text-[10px] font-black uppercase tracking-wider hover:bg-blue-800 transition-colors"
+                        >
+                          Enviar Reset p/ Gmail
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setAdminActionMsg(null)}
+                        className="p-1 rounded-lg hover:bg-black/5"
+                        aria-label="Fechar aviso"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {filteredUsers.length === 0 ? (
                   <div className="p-8 text-center bg-natural-surface/30 rounded-2xl text-xs font-bold text-natural-muted space-y-1">
                     <p className="text-natural-heading font-black">Nenhum utilizador encontrado com os filtros actuais.</p>
@@ -5126,6 +5487,7 @@ const AdminMetrics = memo(({
                           <th className="p-3">Contacto / WhatsApp</th>
                           <th className="p-3">Biscates / Saldo</th>
                           <th className="p-3">Última Actividade</th>
+                          <th className="p-3 text-right">Acções Admin</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-natural-line/60 bg-white">
@@ -5137,6 +5499,8 @@ const AdminMetrics = memo(({
                               ? `Olá ${u.fullName || ''}! Tudo bem? Contactamos a partir da equipa Mozbiscates.` 
                               : `Olá ${u.fullName || ''}! Notámos que não tem utilizado o Mozbiscates recentemente. Como podemos ajudar?`
                           );
+                          const isProtectedAdmin = isAuthorizedAdminEmail(u.email);
+                          const isDemoUser = isDemoPresentationEmail(u.email);
 
                           return (
                             <tr key={u.id || u.uid} className="hover:bg-natural-surface/30 transition-colors">
@@ -5155,6 +5519,9 @@ const AdminMetrics = memo(({
                                       {u.verified && (
                                         <CheckCircle2 className="w-3.5 h-3.5 text-natural-accent shrink-0" />
                                       )}
+                                      {isDemoUser && (
+                                        <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 text-[8px] font-black uppercase">Demo</span>
+                                      )}
                                     </div>
                                     <p className="text-[10px] text-natural-muted font-normal truncate max-w-[160px]">
                                       {u.email || (u.id || u.uid || '').slice(0, 12)}
@@ -5166,9 +5533,13 @@ const AdminMetrics = memo(({
                               <td className="p-3">
                                 <div className="space-y-0.5">
                                   <span className={`inline-block px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${
-                                    u.role === 'worker' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'
+                                    u.role === 'admin'
+                                      ? 'bg-slate-800 text-white'
+                                      : u.role === 'worker'
+                                        ? 'bg-orange-100 text-orange-700'
+                                        : 'bg-blue-100 text-blue-700'
                                   }`}>
-                                    {u.role === 'worker' ? 'Biscateiro' : 'Cliente'}
+                                    {u.role === 'admin' ? 'Admin' : u.role === 'worker' ? 'Biscateiro' : 'Cliente'}
                                   </span>
                                   {u.category && (
                                     <p className="text-[10px] font-bold text-natural-muted truncate max-w-[120px]">
@@ -5236,11 +5607,140 @@ const AdminMetrics = memo(({
                                   </p>
                                 </div>
                               </td>
+
+                              <td className="p-3 text-right">
+                                {isProtectedAdmin ? (
+                                  <span className="text-[9px] font-black uppercase text-natural-muted px-2 py-1 rounded-lg bg-natural-surface">
+                                    Protegida
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setManagingUser(u);
+                                      setAdminOldPass('');
+                                      setAdminDeleteJobs(true);
+                                    }}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-red-50 hover:bg-red-600 text-red-700 hover:text-white border border-red-200 text-[10px] font-black uppercase tracking-wider transition-colors whitespace-nowrap"
+                                    title="Gerir ou apagar conta"
+                                  >
+                                    <UserCog className="w-3.5 h-3.5" />
+                                    <span>Gerir / Apagar</span>
+                                  </button>
+                                )}
+                              </td>
                             </tr>
                           );
                         })}
                       </tbody>
                     </table>
+                  </div>
+                )}
+
+                {managingUser && (
+                  <div className="fixed inset-0 z-[260] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+                    <div className="w-full max-w-md bg-white rounded-[2rem] border-2 border-natural-line shadow-2xl p-6 space-y-5 my-auto text-left">
+                      <div className="flex items-start justify-between gap-3 border-b border-natural-line pb-3">
+                        <div>
+                          <span className="text-[9px] font-black uppercase tracking-widest text-natural-accent">Poder Total do Administrador</span>
+                          <h4 className="text-lg font-black text-natural-heading leading-tight mt-0.5">
+                            {managingUser.fullName || managingUser.email || 'Utilizador'}
+                          </h4>
+                          <p className="text-xs font-mono text-natural-muted break-all">{managingUser.email || managingUser.id}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setManagingUser(null)}
+                          className="p-2 rounded-xl bg-natural-surface text-natural-muted hover:text-natural-heading"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          disabled={adminActionLoading}
+                          onClick={() => handleAdminToggleVerify(managingUser)}
+                          className="py-2.5 px-3 rounded-xl border border-natural-line bg-natural-surface hover:border-natural-accent text-[10px] font-black uppercase tracking-wider text-natural-heading transition-colors disabled:opacity-50"
+                        >
+                          {managingUser.verified ? 'Remover Selo Verificado' : 'Marcar Verificado'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={adminActionLoading}
+                          onClick={() => handleAdminSwitchRole(managingUser, managingUser.role === 'worker' ? 'client' : 'worker')}
+                          className="py-2.5 px-3 rounded-xl border border-natural-line bg-natural-surface hover:border-natural-accent text-[10px] font-black uppercase tracking-wider text-natural-heading transition-colors disabled:opacity-50"
+                        >
+                          Mudar p/ {managingUser.role === 'worker' ? 'Cliente' : 'Biscateiro'}
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={adminActionLoading}
+                        onClick={() => handleAdminResetToDemo(managingUser)}
+                        className="w-full py-3 px-4 rounded-2xl bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-900 text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+                      >
+                        <RefreshCw className="w-4 h-4" />
+                        <span>Limpar Dados Antigos & Tornar Demo</span>
+                      </button>
+
+                      <div className="p-4 rounded-2xl bg-red-50/80 border border-red-200 space-y-3">
+                        <div className="flex items-center gap-2 text-red-900 text-xs font-black uppercase tracking-wider">
+                          <Trash2 className="w-4 h-4 text-red-600 shrink-0" />
+                          <span>Apagar Conta Permanentemente</span>
+                        </div>
+                        <p className="text-[11px] text-red-800 leading-snug font-medium">
+                          Apaga o perfil, documentos privados (BI/Selfie), histórico financeiro e, opcionalmente, os biscates antigos desta conta.
+                        </p>
+
+                        <label className="flex items-center gap-2 text-xs font-bold text-red-900 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={adminDeleteJobs}
+                            onChange={(e) => setAdminDeleteJobs(e.target.checked)}
+                            className="w-4 h-4 accent-red-600 rounded"
+                          />
+                          <span>Apagar também todos os biscates associados</span>
+                        </label>
+
+                        <div>
+                          <label className="block text-[10px] font-black uppercase text-red-900/80 mb-1">
+                            Senha atual da conta (opcional, p/ apagar também o login Auth)
+                          </label>
+                          <input
+                            type="password"
+                            value={adminOldPass}
+                            onChange={(e) => setAdminOldPass(e.target.value)}
+                            placeholder="Deixe vazio se não souber a senha antiga"
+                            className="w-full px-3 py-2.5 bg-white border border-red-200 rounded-xl text-xs font-semibold outline-none focus:border-red-500"
+                          />
+                        </div>
+
+                        <div className="flex gap-2">
+                          {managingUser.email && (
+                            <button
+                              type="button"
+                              disabled={adminActionLoading}
+                              onClick={() => handleAdminSendResetEmail(managingUser.email)}
+                              className="flex-1 py-2.5 px-3 rounded-xl bg-white border border-red-200 text-red-800 text-[10px] font-black uppercase tracking-wider hover:bg-red-100 transition-colors disabled:opacity-50"
+                            >
+                              Enviar Reset Gmail
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            disabled={adminActionLoading}
+                            onClick={() => handleAdminDeleteUserAccount(managingUser)}
+                            className="flex-[1.4] py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white text-[10px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm transition-colors disabled:opacity-50"
+                          >
+                            {adminActionLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                            <span>Confirmar Exclusão</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -5413,6 +5913,8 @@ const AuthScreen = ({ onAuthSuccess, t, lang }: { onAuthSuccess: (user: Firebase
   const [showDemoPassword, setShowDemoPassword] = useState(false);
   const [demoProvisioning, setDemoProvisioning] = useState(false);
   const [demoLoggingInRole, setDemoLoggingInRole] = useState<'worker' | 'client' | null>(null);
+  const [showDemoWipePanel, setShowDemoWipePanel] = useState(false);
+  const [demoOldWorkerPass, setDemoOldWorkerPass] = useState('');
 
   // Estados específicos para Recuperação de Palavra-passe Oficial (mozbiscates@gmail.com)
   const [recoveryStep, setRecoveryStep] = useState<'email' | 'code' | 'password' | 'success'>('email');
@@ -5473,7 +5975,11 @@ const AuthScreen = ({ onAuthSuccess, t, lang }: { onAuthSuccess: (user: Firebase
 
     try {
       if (mode === 'login') {
-        const res = await signInWithEmailAndPassword(auth, email.trim(), password);
+        const cleanEmail = email.trim().toLowerCase();
+        const res = await signInWithEmailAndPassword(auth, cleanEmail, password);
+        if (isDemoPresentationEmail(cleanEmail)) {
+          saveDemoSessionPassword(password);
+        }
         onAuthSuccess(res.user);
       } else if (mode === 'register') {
         const res = await createUserWithEmailAndPassword(auth, email.trim(), password);
@@ -5507,12 +6013,62 @@ const AuthScreen = ({ onAuthSuccess, t, lang }: { onAuthSuccess: (user: Firebase
 
     setDemoProvisioning(true);
     try {
-      await provisionDemoAccount(DEMO_ACCOUNTS.worker.email, pass, DEMO_ACCOUNTS.worker);
-      await provisionDemoAccount(DEMO_ACCOUNTS.client.email, pass, DEMO_ACCOUNTS.client);
+      await provisionDemoAccount(DEMO_ACCOUNTS.worker.email, pass, DEMO_ACCOUNTS.worker, { resetExistingProfile: true });
+      await provisionDemoAccount(DEMO_ACCOUNTS.client.email, pass, DEMO_ACCOUNTS.client, { resetExistingProfile: true });
+      saveDemoSessionPassword(pass);
       setPassword(pass);
-      setMessage('Contas demo criadas/atualizadas! Escolha Biscateiro ou Cliente abaixo para entrar.');
+      setShowDemoWipePanel(false);
+      setMessage('Contas demo criadas/reiniciadas! Escolha Biscateiro ou Cliente abaixo para entrar.');
     } catch (err: any) {
       setError(err?.message || 'Não foi possível criar/atualizar as contas demo.');
+      if (String(err?.message || '').includes('outra palavra-passe')) {
+        setShowDemoWipePanel(true);
+      }
+    } finally {
+      setDemoProvisioning(false);
+    }
+  };
+
+  const handleWipeAndRecreateWorkerDemo = async () => {
+    setError('');
+    setMessage('');
+    const oldPass = demoOldWorkerPass.trim();
+    const newPass = demoPassword.trim();
+    if (!oldPass) {
+      setError('Introduza a senha antiga da conta pandavlogs419@gmail.com para a apagar antes de recriar.');
+      return;
+    }
+    if (newPass.length < 6) {
+      setError('Defina também a nova palavra-passe demo (mín. 6 caracteres) acima.');
+      return;
+    }
+
+    setDemoProvisioning(true);
+    try {
+      await deleteAccountAuthWithPassword(DEMO_ACCOUNTS.worker.email, oldPass);
+      await provisionDemoAccount(DEMO_ACCOUNTS.worker.email, newPass, DEMO_ACCOUNTS.worker, { resetExistingProfile: true });
+      await provisionDemoAccount(DEMO_ACCOUNTS.client.email, newPass, DEMO_ACCOUNTS.client, { resetExistingProfile: true });
+      saveDemoSessionPassword(newPass);
+      setDemoOldWorkerPass('');
+      setShowDemoWipePanel(false);
+      setPassword(newPass);
+      setMessage('Conta antiga apagada e recriada como Biscateiro Demo com a sua nova palavra-passe!');
+    } catch (err: any) {
+      setError(err?.message || 'Não foi possível apagar a conta antiga.');
+    } finally {
+      setDemoProvisioning(false);
+    }
+  };
+
+  const handleSendWorkerResetEmail = async () => {
+    setError('');
+    setMessage('');
+    setDemoProvisioning(true);
+    try {
+      await sendPasswordResetEmail(auth, DEMO_ACCOUNTS.worker.email);
+      setMessage(`Link oficial de redefinição enviado para ${DEMO_ACCOUNTS.worker.email}! Defina a nova senha no Gmail e depois ative as contas demo.`);
+    } catch (err: any) {
+      setError(err?.message || 'Não foi possível enviar o link de redefinição.');
     } finally {
       setDemoProvisioning(false);
     }
@@ -5524,7 +6080,7 @@ const AuthScreen = ({ onAuthSuccess, t, lang }: { onAuthSuccess: (user: Firebase
     setMessage('');
     setEmail(targetConfig.email);
 
-    const activePass = (demoPassword || password).trim();
+    const activePass = (demoPassword || password || getDemoSessionPassword()).trim();
     if (activePass.length < 6) {
       setMessage(`E-mail ${targetConfig.email} preenchido. Introduza a palavra-passe acima para entrar.`);
       return;
@@ -5534,6 +6090,7 @@ const AuthScreen = ({ onAuthSuccess, t, lang }: { onAuthSuccess: (user: Firebase
     setDemoLoggingInRole(targetRole);
     try {
       const res = await signInWithEmailAndPassword(auth, targetConfig.email, activePass);
+      saveDemoSessionPassword(activePass);
       onAuthSuccess(res.user);
     } catch (err: any) {
       if (err?.code === 'auth/user-not-found' || err?.code === 'auth/invalid-credential') {
@@ -6178,6 +6735,50 @@ const AuthScreen = ({ onAuthSuccess, t, lang }: { onAuthSuccess: (user: Firebase
                 {demoLoggingInRole === 'client' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <User className="w-3.5 h-3.5 shrink-0" />}
                 <span>Entrar Cliente</span>
               </button>
+            </div>
+
+            <div className="pt-1 border-t border-natural-line/60">
+              <button
+                type="button"
+                onClick={() => setShowDemoWipePanel((v) => !v)}
+                className="text-[10px] font-black uppercase tracking-wider text-natural-muted hover:text-natural-accent transition-colors"
+              >
+                {showDemoWipePanel ? '▲ Ocultar opções da conta antiga' : '▼ A conta pandavlogs419 já existia? Apagar & Recriar'}
+              </button>
+
+              {showDemoWipePanel && (
+                <div className="mt-3 p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200 space-y-2.5">
+                  <p className="text-[10px] text-amber-950 font-semibold leading-snug">
+                    Se <strong>pandavlogs419@gmail.com</strong> já foi registada antes com outra senha, pode apagá-la do login com a senha antiga e recriar como Demo limpa, ou enviar um link de redefinição para o Gmail.
+                  </p>
+                  <input
+                    type="password"
+                    value={demoOldWorkerPass}
+                    onChange={(e) => setDemoOldWorkerPass(e.target.value)}
+                    placeholder="Senha antiga de pandavlogs419@gmail.com"
+                    className="w-full px-3 py-2.5 bg-white border border-amber-300 rounded-xl text-xs font-semibold outline-none focus:border-natural-accent"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleWipeAndRecreateWorkerDemo}
+                      disabled={demoProvisioning}
+                      className="flex-1 py-2 px-3 rounded-xl bg-red-600 hover:bg-red-700 text-white text-[10px] font-black uppercase tracking-wider flex items-center justify-center gap-1 disabled:opacity-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Apagar & Recriar</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSendWorkerResetEmail}
+                      disabled={demoProvisioning}
+                      className="flex-1 py-2 px-3 rounded-xl bg-white border border-amber-300 text-amber-900 text-[10px] font-black uppercase tracking-wider hover:bg-amber-100 disabled:opacity-50"
+                    >
+                      Enviar Reset Gmail
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -7062,6 +7663,20 @@ function MainApp() {
   const [showEmergencyModal, setShowEmergencyModal] = useState(false);
   const [activeEmergencyJob, setActiveEmergencyJob] = useState<any>(null);
   const [showClientProfileModal, setShowClientProfileModal] = useState(false);
+  const [openJobs, setOpenJobs] = useState<Job[]>([]);
+  const [showOpenPedidoModal, setShowOpenPedidoModal] = useState(false);
+  const [openPedidoCategory, setOpenPedidoCategory] = useState('Electricista Profissional');
+  const [openPedidoBairro, setOpenPedidoBairro] = useState('');
+  const [openPedidoAmount, setOpenPedidoAmount] = useState('500');
+  const [openPedidoDesc, setOpenPedidoDesc] = useState('');
+  const [openPedidoType, setOpenPedidoType] = useState<'immediate' | 'scheduled'>('immediate');
+  const [openPedidoDateTime, setOpenPedidoDateTime] = useState('');
+  const [openPedidoTarget, setOpenPedidoTarget] = useState<'open' | 'demo_worker'>('open');
+  const [creatingOpenPedido, setCreatingOpenPedido] = useState(false);
+  const [demoSwitchLoading, setDemoSwitchLoading] = useState(false);
+  const [showDemoPassPrompt, setShowDemoPassPrompt] = useState(false);
+  const [demoSwitchPassInput, setDemoSwitchPassInput] = useState('');
+  const [demoSwitchError, setDemoSwitchError] = useState('');
   const [emergencyAlerts, setEmergencyAlerts] = useState<any[]>([]);
   const [showInactivityModal, setShowInactivityModal] = useState(false);
   const [allUsers, setAllUsers] = useState<any[]>([]);
@@ -7694,6 +8309,7 @@ function MainApp() {
             setSecurityData(secData);
             setUserData(resolvedData);
             setRole(demoConfig.role);
+            setTab(demoConfig.role === 'worker' ? 'jobs' : 'explore');
             setView('app');
           } else if (userDoc.exists()) {
             const data = userDoc.data();
@@ -7847,6 +8463,8 @@ function MainApp() {
   };
 
   const handleLogout = async () => {
+    clearDemoSessionPassword();
+    setOpenJobs([]);
     await signOut(auth);
   };
 
@@ -7959,10 +8577,20 @@ function MainApp() {
     const unsubscribe = onSnapshot(q, (snap) => {
       const data = snap.docs.map(d => {
         const docData = d.data() as any;
+        const resolvedName = String(docData.name || docData.fullName || 'Prestador Mozbiscates');
+        const resolvedCat = String(
+          docData.category ||
+          docData.specialty ||
+          (Array.isArray(docData.specialties) && docData.specialties[0]) ||
+          'Serviços Gerais'
+        );
         return {
           id: d.id,
           ...docData,
-          name: docData.name || docData.fullName || 'Prestador Mozbiscates',
+          name: resolvedName,
+          category: resolvedCat,
+          specialty: String(docData.specialty || resolvedCat),
+          phone: String(docData.phone || ''),
           photo: docData.photo || '',
           bairro: docData.bairro || 'Maputo',
           rating: typeof docData.rating === 'number' ? docData.rating : 5.0,
@@ -7974,7 +8602,13 @@ function MainApp() {
 
       // Check document changes for newly added or newly verified workers
       snap.docChanges().forEach((change) => {
-        const p = { id: change.doc.id, ...change.doc.data() } as Provider;
+        const docData = change.doc.data() as any;
+        const p = {
+          id: change.doc.id,
+          ...docData,
+          name: String(docData.name || docData.fullName || 'Prestador Mozbiscates'),
+          category: String(docData.category || docData.specialty || 'Serviços Gerais')
+        } as Provider;
         if (p.verified && (change.type === 'added' || change.type === 'modified')) {
           checkAndNotifyNearbyProvider(p, userLocation, isFirstProvidersSyncRef.current);
         }
@@ -8272,6 +8906,37 @@ function MainApp() {
     return () => unsubscribe();
   }, [currentUser, role, alertCategory, t]);
 
+  // Listen to Open Pedidos available in the marketplace so Workers can browse & accept
+  useEffect(() => {
+    if (!currentUser || role !== 'worker') {
+      setOpenJobs([]);
+      return;
+    }
+    const qOpen = query(
+      collection(db, 'jobs'),
+      where('status', '==', 'AGUARDANDO_DEPOSITO'),
+      limit(50)
+    );
+    const unsubscribe = onSnapshot(
+      qOpen,
+      (snap) => {
+        const list = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as Job))
+          .filter((j) => j.providerId === 'OPEN' && j.clientId !== currentUser.uid);
+        list.sort((a, b) => {
+          const timeA = a.createdAt?.seconds ? a.createdAt.seconds * 1000 : 0;
+          const timeB = b.createdAt?.seconds ? b.createdAt.seconds * 1000 : 0;
+          return timeB - timeA;
+        });
+        setOpenJobs(list);
+      },
+      (err) => {
+        console.warn('Open jobs listener notice:', err);
+      }
+    );
+    return () => unsubscribe();
+  }, [currentUser?.uid, role]);
+
   const [bookingAmount, setBookingAmount] = useState('500');
   const [bookingDesc, setBookingDesc] = useState('');
   const [bookingType, setBookingType] = useState<'immediate' | 'scheduled'>('immediate');
@@ -8301,33 +8966,46 @@ function MainApp() {
   }, [focusedJobId, tab]);
 
   const handleStartBiscate = async (p: Provider) => {
-    if (!currentUser) return;
+    if (!currentUser || !p?.id) return;
     const parsedAmount = Math.round(Number(bookingAmount));
     if (isNaN(parsedAmount) || parsedAmount < 50 || parsedAmount > 500000) {
-      alert("Por favor, introduza um valor válido para o biscate (entre 50 MT e 500.000 MT).");
+      setNotification({
+        title: 'Valor inválido',
+        body: 'Por favor, introduza um valor válido para o biscate (entre 50 MT e 500.000 MT).'
+      });
+      setTimeout(() => setNotification(null), 5000);
       return;
     }
     if (bookingType === 'scheduled' && !bookingDateTime) {
-      alert("Por favor, selecione a data e hora para o agendamento.");
+      setNotification({
+        title: 'Data obrigatória',
+        body: 'Por favor, selecione a data e hora para o agendamento.'
+      });
+      setTimeout(() => setNotification(null), 5000);
       return;
     }
     // Sanitize description to prevent script injections
-    const sanitizedDesc = (bookingDesc || '').replace(/[<>]/g, '').trim().slice(0, 500);
+    const sanitizedDesc = String(bookingDesc || '').replace(/[<>]/g, '').trim().slice(0, 500);
+    const safeCategory = String(p.category || (p as any).specialty || 'Serviços Gerais').slice(0, 60);
+    const safeProviderName = String(p.name || (p as any).fullName || 'Prestador Mozbiscates').slice(0, 100);
+    const safeClientName = String(userData?.fullName || currentUser.email?.split('@')[0] || 'Cliente').slice(0, 100);
+    const safeBairro = String(userData?.bairro || bairro || 'Maputo').slice(0, 60);
 
     try {
       await addDoc(collection(db, 'jobs'), {
-        providerId: p.id,
-        category: p.category.slice(0, 60),
+        providerId: String(p.id),
+        category: safeCategory,
         clientId: currentUser.uid,
-        clientName: (userData?.fullName || 'Cliente').slice(0, 100),
-        clientPhone: userData?.phone || '',
-        providerName: p.name.slice(0, 100),
-        providerPhone: p.phone || '',
-        bairro: (userData?.bairro || bairro || '').slice(0, 60),
+        clientName: safeClientName,
+        clientPhone: String(userData?.phone || ''),
+        providerName: safeProviderName,
+        providerPhone: String(p.phone || ''),
+        bairro: safeBairro,
         amount: parsedAmount,
         description: sanitizedDesc,
         bookingType: bookingType === 'scheduled' ? 'scheduled' : 'immediate',
         scheduledFor: bookingType === 'scheduled' ? bookingDateTime : null,
+        workerAccepted: false,
         status: 'AGUARDANDO_DEPOSITO',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -8342,6 +9020,128 @@ function MainApp() {
       setBookingDateTime('');
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, 'jobs');
+    }
+  };
+
+  const handleCreateOpenPedido = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser || creatingOpenPedido) return;
+
+    const parsedAmount = Math.round(Number(openPedidoAmount));
+    if (isNaN(parsedAmount) || parsedAmount < 50 || parsedAmount > 500000) {
+      setNotification({
+        title: 'Valor inválido',
+        body: 'Introduza um valor entre 50 MT e 500.000 MT para publicar o pedido.'
+      });
+      setTimeout(() => setNotification(null), 5000);
+      return;
+    }
+    if (openPedidoType === 'scheduled' && !openPedidoDateTime) {
+      setNotification({
+        title: 'Data em falta',
+        body: 'Selecione a data e hora para o pedido agendado.'
+      });
+      setTimeout(() => setNotification(null), 5000);
+      return;
+    }
+
+    const demoWorkerProvider =
+      openPedidoTarget === 'demo_worker'
+        ? rawProviders.find(
+            (p: any) =>
+              (p.email || '').toLowerCase() === DEMO_ACCOUNTS.worker.email ||
+              (p.name || '').includes('Panda Vlogs')
+          )
+        : null;
+
+    const sanitizedDesc = (openPedidoDesc || 'Preciso de assistência profissional rápida no local.')
+      .replace(/[<>]/g, '')
+      .trim()
+      .slice(0, 500);
+
+    setCreatingOpenPedido(true);
+    try {
+      const docRef = await addDoc(collection(db, 'jobs'), {
+        providerId: demoWorkerProvider ? String(demoWorkerProvider.id) : 'OPEN',
+        category: String(openPedidoCategory || 'Electricista Profissional').slice(0, 60),
+        clientId: currentUser.uid,
+        clientName: String(userData?.fullName || currentUser.email?.split('@')[0] || 'Cliente').slice(0, 100),
+        clientPhone: String(userData?.phone || ''),
+        providerName: demoWorkerProvider
+          ? String(demoWorkerProvider.name || (demoWorkerProvider as any).fullName || 'Biscateiro Demo').slice(0, 100)
+          : 'Pedido Aberto (Aguarda Biscateiro)',
+        providerPhone: demoWorkerProvider ? String(demoWorkerProvider.phone || '') : '',
+        bairro: String(openPedidoBairro || userData?.bairro || bairro || 'Maputo').slice(0, 60),
+        amount: parsedAmount,
+        description: sanitizedDesc,
+        bookingType: openPedidoType === 'scheduled' ? 'scheduled' : 'immediate',
+        scheduledFor: openPedidoType === 'scheduled' ? openPedidoDateTime : null,
+        workerAccepted: false,
+        status: 'AGUARDANDO_DEPOSITO',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        lat: userLocation[0],
+        lng: userLocation[1]
+      });
+
+      setShowOpenPedidoModal(false);
+      setOpenPedidoDesc('');
+      setOpenPedidoAmount('500');
+      setOpenPedidoType('immediate');
+      setOpenPedidoDateTime('');
+      setTab('jobs');
+      setFocusedJobId(docRef.id);
+      setTimeout(() => setFocusedJobId(null), 8000);
+      setNotification({
+        title: '📢 Pedido Publicado com Sucesso!',
+        body: demoWorkerProvider
+          ? `Pedido enviado a ${demoWorkerProvider.name}. Troque para a conta Biscateiro para aceitar!`
+          : 'O pedido está aberto! Entre na conta Biscateiro (pandavlogs419) para aceitar e simular o fluxo.'
+      });
+      setTimeout(() => setNotification(null), 8000);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'jobs');
+    } finally {
+      setCreatingOpenPedido(false);
+    }
+  };
+
+  const handleSwitchDemoRole = async (explicitPass?: string) => {
+    if (!currentUser) return;
+    const currentEmail = (currentUser.email || '').toLowerCase();
+    const targetRole: 'worker' | 'client' =
+      currentEmail === DEMO_ACCOUNTS.worker.email ? 'client' : 'worker';
+
+    const activePass = (explicitPass ?? getDemoSessionPassword()).trim();
+    if (activePass.length < 6) {
+      setDemoSwitchError('');
+      setShowDemoPassPrompt(true);
+      return;
+    }
+
+    setDemoSwitchLoading(true);
+    setDemoSwitchError('');
+    try {
+      await switchDemoAccount(targetRole, activePass);
+      setShowDemoPassPrompt(false);
+      setDemoSwitchPassInput('');
+      setTab(targetRole === 'worker' ? 'jobs' : 'explore');
+      setNotification({
+        title: targetRole === 'worker' ? '🔧 Conta Biscateiro Demo Ativa' : '👤 Conta Cliente Demo Ativa',
+        body: targetRole === 'worker'
+          ? `Sessão iniciada como ${DEMO_ACCOUNTS.worker.email}. Veja Pedidos Abertos ou Biscates em Curso.`
+          : `Sessão iniciada como ${DEMO_ACCOUNTS.client.email}. Publique um pedido ou simule pagamentos.`
+      });
+      setTimeout(() => setNotification(null), 6000);
+    } catch (err: any) {
+      setDemoSwitchError(
+        err?.code === 'auth/wrong-password' || err?.code === 'auth/invalid-credential'
+          ? 'Palavra-passe incorreta. Introduza a senha das contas demo.'
+          : err?.message || 'Não foi possível trocar de conta demo.'
+      );
+      setShowDemoPassPrompt(true);
+    } finally {
+      setDemoSwitchLoading(false);
     }
   };
 
@@ -8500,6 +9300,42 @@ function MainApp() {
     let update: any = { updatedAt: serverTimestamp() };
 
     switch (action) {
+      case 'ACCEPT_JOB':
+        if (!currentUser) return;
+        try {
+          const acceptedWorkerName = (userData?.fullName || currentUser.email?.split('@')[0] || 'Biscateiro Demo').slice(0, 100);
+          const acceptedWorkerPhone = userData?.phone || '';
+          await updateDoc(jobRef, {
+            providerId: currentUser.uid,
+            providerName: acceptedWorkerName,
+            providerPhone: acceptedWorkerPhone,
+            workerAccepted: true,
+            acceptedAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          });
+          await addDoc(collection(db, 'jobs', job.id, 'messages'), {
+            senderId: 'system',
+            text: `✅ O biscateiro ${acceptedWorkerName} aceitou este pedido! O cliente já pode avançar com o pagamento em garantia Escrow.`,
+            createdAt: serverTimestamp()
+          }).catch(() => {});
+          setNotification({
+            title: '✅ Pedido Aceite!',
+            body: 'O pedido está agora na sua lista ativa. Troque para a conta Cliente para simular o pagamento!'
+          });
+          setTimeout(() => setNotification(null), 7000);
+          return;
+        } catch (err) {
+          handleFirestoreError(err, OperationType.WRITE, `jobs/${job.id}`);
+          return;
+        }
+      case 'DEMO_APPROVE_PAYMENT':
+        update.status = 'PAGO';
+        await addDoc(collection(db, 'jobs', job.id, 'messages'), {
+          senderId: 'system',
+          text: `✅ Pagamento validado em modo demonstração! O biscateiro já pode fazer Check-in para iniciar o serviço.`,
+          createdAt: serverTimestamp()
+        }).catch(() => {});
+        break;
       case 'PAY':
       case 'SUBMIT_PAYMENT':
         update.status = 'VALIDACAO_PENDENTE';
@@ -8547,8 +9383,12 @@ function MainApp() {
             body: JSON.stringify({ jobId: job.id })
           });
 
-          const payoutRes = await res.json();
-          if (!res.ok) {
+          let payoutRes = await res.json();
+          if (payoutRes?.demoFallback || (!res.ok && isDemoPresentationEmail(currentUser?.email))) {
+            if (currentUser?.uid) {
+              payoutRes = await settleDemoJobClientFallback(job, currentUser.uid);
+            }
+          } else if (!res.ok) {
             throw new Error(payoutRes.error || "Falha na liquidação do pagamento.");
           }
 
@@ -8567,11 +9407,15 @@ function MainApp() {
             audio.play().catch(() => {});
           } catch (e) {}
 
-          // Retornar diretamente: o backend já executou a transacção atómica, actualizou o trabalho e creditou o saldo
+          // Retornar diretamente: a transacção já actualizou o trabalho e creditou o saldo
           return;
         } catch (payoutErr: any) {
           console.error("Payout error:", payoutErr);
-          alert(payoutErr.message || "Erro ao liquidar o trabalho no servidor.");
+          setNotification({
+            title: 'Erro na Liquidação',
+            body: payoutErr.message || "Erro ao liquidar o trabalho no servidor."
+          });
+          setTimeout(() => setNotification(null), 7000);
           return;
         }
       case 'VALIDATE_PAYMENT':
@@ -8916,11 +9760,18 @@ function MainApp() {
                       const matchedCat = classifyIssueText(voiceInputText);
                       if (matchedCat) {
                         setCategory(matchedCat);
-                        alert(`🔍 ${t.categoryMatched} "${matchedCat}"`);
+                        setNotification({
+                          title: '🔍 Categoria Encontrada',
+                          body: `${t.categoryMatched} "${matchedCat}"`
+                        });
                       } else {
                         setCategory(voiceInputText);
-                        alert(`🔍 ${t.noCategoryMatched} "${voiceInputText}"`);
+                        setNotification({
+                          title: '🔍 Pesquisa Aplicada',
+                          body: `${t.noCategoryMatched} "${voiceInputText}"`
+                        });
                       }
+                      setTimeout(() => setNotification(null), 5000);
                       setVoiceFallbackOpen(false);
                       setVoiceInputText('');
                     }}
@@ -9014,12 +9865,96 @@ function MainApp() {
           </div>
         </nav>
 
+        {/* --- Barra Rápida de Apresentação Demo (Exclusiva para Contas Demo) --- */}
+        {isDemoAccount && (
+          <div className="mx-4 mt-3 bg-gradient-to-r from-natural-heading via-stone-800 to-natural-heading text-white rounded-3xl p-4 shadow-lg border border-white/10 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span className="text-[10px] font-black uppercase tracking-widest text-amber-300">
+                    Modo Apresentação Demo
+                  </span>
+                </div>
+                <p className="text-xs font-bold text-white truncate mt-0.5">
+                  {role === 'worker' ? '🔧 Biscateiro: pandavlogs419@gmail.com' : '👤 Cliente: mrwanderboy7@gmail.com'}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={demoSwitchLoading}
+                onClick={() => handleSwitchDemoRole()}
+                className="shrink-0 bg-natural-accent hover:bg-orange-600 active:scale-95 text-white px-3.5 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 shadow-md transition-all disabled:opacity-60"
+              >
+                {demoSwitchLoading ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-3.5 h-3.5" />
+                )}
+                <span>{role === 'worker' ? 'Ir para Cliente' : 'Ir para Biscateiro'}</span>
+              </button>
+            </div>
+
+            {showDemoPassPrompt && (
+              <div className="bg-black/30 p-3 rounded-2xl border border-white/15 space-y-2">
+                <p className="text-[10px] text-white/80 font-semibold">
+                  Introduza a palavra-passe das contas demo uma vez para alternar com 1 clique:
+                </p>
+                {demoSwitchError && (
+                  <p className="text-[10px] text-red-300 font-bold">{demoSwitchError}</p>
+                )}
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={demoSwitchPassInput}
+                    onChange={(e) => setDemoSwitchPassInput(e.target.value)}
+                    placeholder="Palavra-passe demo"
+                    className="flex-1 px-3 py-2 rounded-xl bg-white text-natural-heading text-xs font-bold outline-none"
+                  />
+                  <button
+                    type="button"
+                    disabled={demoSwitchLoading || demoSwitchPassInput.trim().length < 6}
+                    onClick={() => handleSwitchDemoRole(demoSwitchPassInput)}
+                    className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-[10px] font-black uppercase disabled:opacity-50"
+                  >
+                    Trocar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowDemoPassPrompt(false)}
+                    className="px-2.5 py-2 rounded-xl bg-white/10 text-white text-[10px] font-bold"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-1 text-[9px] font-bold text-white/75">
+              <span className="px-2 py-0.5 rounded-lg bg-white/10 shrink-0">1. Publicar Pedido (Cliente)</span>
+              <span>→</span>
+              <span className="px-2 py-0.5 rounded-lg bg-white/10 shrink-0">2. Aceitar (Biscateiro)</span>
+              <span>→</span>
+              <span className="px-2 py-0.5 rounded-lg bg-white/10 shrink-0">3. STK Push M-Pesa</span>
+              <span>→</span>
+              <span className="px-2 py-0.5 rounded-lg bg-white/10 shrink-0">4. Check-in/Out</span>
+              <span>→</span>
+              <span className="px-2 py-0.5 rounded-lg bg-white/10 shrink-0">5. Libertar & Sacar</span>
+            </div>
+          </div>
+        )}
+
         <nav className="flex px-6 items-center gap-6 my-4 overflow-x-auto no-scrollbar scroll-smooth bg-white py-2">
           <button onClick={() => setTab('explore')} className={`text-[12px] font-black uppercase tracking-[0.15em] transition-all whitespace-nowrap pb-3 border-b-4 ${tab === 'explore' ? 'text-natural-heading border-natural-accent' : 'text-natural-muted border-transparent opacity-30'}`}>
             COMEÇAR
           </button>
-          <button onClick={() => { setTab('jobs'); if(role === 'admin') setAdminView('active'); }} className={`text-[12px] font-black uppercase tracking-[0.15em] transition-all whitespace-nowrap pb-3 border-b-4 ${tab === 'jobs' && (role !== 'admin' || adminView === 'active') ? 'text-natural-heading border-natural-accent' : 'text-natural-muted border-transparent opacity-30'}`}>
-            BISCATES
+          <button onClick={() => { setTab('jobs'); if(role === 'admin') setAdminView('active'); }} className={`text-[12px] font-black uppercase tracking-[0.15em] transition-all whitespace-nowrap pb-3 border-b-4 flex items-center gap-1.5 ${tab === 'jobs' && (role !== 'admin' || adminView === 'active') ? 'text-natural-heading border-natural-accent' : 'text-natural-muted border-transparent opacity-30'}`}>
+            <span>BISCATES</span>
+            {role === 'worker' && openJobs.length > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full bg-emerald-600 text-white text-[9px] font-black leading-none">
+                {openJobs.length}
+              </span>
+            )}
           </button>
           {role === 'admin' && (
             <>
@@ -9057,7 +9992,34 @@ function MainApp() {
           <div className="flex-1 animate-in fade-in slide-in-from-bottom-4 duration-300">
              {role !== 'worker' ? (
                <div className="px-6 py-10">
-                 <h2 className="text-4xl font-black text-natural-heading mb-8 tracking-tighter leading-none italic">{(String(t.welcome || 'O que vamos resolver hoje?')).split(' ').map((w: string, i: number) => i === 3 ? <span key={i} className="text-natural-accent">{w} </span> : <Fragment key={i}>{w} </Fragment>)}</h2>
+                 <h2 className="text-4xl font-black text-natural-heading mb-6 tracking-tighter leading-none italic">{(String(t.welcome || 'O que vamos resolver hoje?')).split(' ').map((w: string, i: number) => i === 3 ? <span key={i} className="text-natural-accent">{w} </span> : <Fragment key={i}>{w} </Fragment>)}</h2>
+
+                 {/* CTA Destacado para Publicar Pedido (Aberto ou Directo para Biscateiro Demo) */}
+                 <div className="mb-8 bg-gradient-to-br from-natural-heading to-stone-800 text-white p-5 rounded-[2rem] shadow-lg flex items-center justify-between gap-4 border border-white/10">
+                   <div className="min-w-0">
+                     <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-widest text-amber-300 mb-1">
+                       <Zap className="w-3 h-3" /> Pedido Rápido &amp; Escrow
+                     </span>
+                     <h3 className="text-base font-black tracking-tight leading-snug">
+                       Precisa de um biscateiro hoje?
+                     </h3>
+                     <p className="text-[11px] text-white/75 font-medium leading-tight mt-1">
+                       Publique um pedido aberto para qualquer biscateiro aceitar ou envie directo para o Biscateiro Demo.
+                     </p>
+                   </div>
+                   <button
+                     type="button"
+                     onClick={() => {
+                       setOpenPedidoBairro(userData?.bairro || bairro || 'Polana Cimento');
+                       setOpenPedidoTarget(isDemoAccount ? 'open' : openPedidoTarget);
+                       setShowOpenPedidoModal(true);
+                     }}
+                     className="shrink-0 bg-natural-accent hover:bg-orange-600 active:scale-95 text-white px-4 py-3.5 rounded-2xl text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 shadow-xl transition-all"
+                   >
+                     <Plus className="w-4 h-4" />
+                     <span>Publicar Pedido</span>
+                   </button>
+                 </div>
                  
                  <div className="bg-white border-2 border-natural-line p-5 rounded-[2.5rem] mb-12 shadow-premium flex flex-col gap-4 relative">
                     <div className="flex items-center gap-4 relative">
@@ -9328,23 +10290,72 @@ function MainApp() {
                    />
                  ) : role === 'admin' && adminView === 'alerts' ? (
                    <AdminEmergencyMonitor alerts={emergencyAlerts} />
-                 ) : (
-                   jobs.length > 0 ? (
-                    <div className="space-y-4">
-                      {jobs.map(j => (
-                        <div key={j.id} id={`job-${j.id}`} className={focusedJobId === j.id ? 'ring-4 ring-natural-accent ring-offset-4 rounded-[2rem] animate-pulse transition-all duration-1000' : ''}>
-                          <JobCard job={j} role={role!} onAction={handleJobAction} t={t} currentUser={currentUser} lang={lang} onPanic={(job) => { setActiveEmergencyJob(job); setShowEmergencyModal(true); }} />
-                        </div>
-                      ))}
-                    </div>
                   ) : (
-                    <div className="text-center py-24 bg-white rounded-[3rem] border border-dashed border-natural-line group">
-                      <div className="w-20 h-20 bg-natural-surface rounded-full flex items-center justify-center mx-auto mb-6 group-hover:rotate-12 transition-transform"><Package className="w-10 h-10 text-natural-muted" /></div>
-                      <p className="font-black text-natural-heading text-xl mb-1">{t.nothingHere}</p>
-                      <p className="text-xs text-natural-muted font-bold uppercase tracking-widest leading-loose">{t.startFirst}</p>
-                    </div>
-                  )
-                 )}
+                   <div className="space-y-6">
+                     {/* Secção de Pedidos Abertos para o Biscateiro aceitar */}
+                     {role === 'worker' && openJobs.length > 0 && (
+                       <div className="space-y-3">
+                         <div className="flex items-center justify-between px-1">
+                           <h3 className="text-xs font-black uppercase tracking-widest text-emerald-800 flex items-center gap-2">
+                             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
+                             <span>Pedidos Abertos Disponíveis ({openJobs.length})</span>
+                           </h3>
+                           <span className="text-[9px] font-black uppercase text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
+                             Prontos a Aceitar
+                           </span>
+                         </div>
+                         <div className="space-y-4">
+                           {openJobs.map((oj) => (
+                             <div key={`open-${oj.id}`} id={`job-${oj.id}`}>
+                               <JobCard
+                                 job={oj}
+                                 role={role!}
+                                 onAction={handleJobAction}
+                                 t={t}
+                                 currentUser={currentUser}
+                                 lang={lang}
+                                 isDemoAccount={isDemoAccount}
+                                 userPhone={userData?.phone || ''}
+                                 onPanic={(job) => { setActiveEmergencyJob(job); setShowEmergencyModal(true); }}
+                               />
+                             </div>
+                           ))}
+                         </div>
+                       </div>
+                     )}
+
+                     {jobs.length > 0 ? (
+                       <div className="space-y-4">
+                         {role === 'worker' && openJobs.length > 0 && (
+                           <h3 className="text-xs font-black uppercase tracking-widest text-natural-muted px-1 pt-2">
+                             Os Meus Biscates ({jobs.length})
+                           </h3>
+                         )}
+                         {jobs.map(j => (
+                           <div key={j.id} id={`job-${j.id}`} className={focusedJobId === j.id ? 'ring-4 ring-natural-accent ring-offset-4 rounded-[2rem] animate-pulse transition-all duration-1000' : ''}>
+                             <JobCard
+                               job={j}
+                               role={role!}
+                               onAction={handleJobAction}
+                               t={t}
+                               currentUser={currentUser}
+                               lang={lang}
+                               isDemoAccount={isDemoAccount}
+                               userPhone={userData?.phone || ''}
+                               onPanic={(job) => { setActiveEmergencyJob(job); setShowEmergencyModal(true); }}
+                             />
+                           </div>
+                         ))}
+                       </div>
+                     ) : (role === 'worker' && openJobs.length > 0) ? null : (
+                       <div className="text-center py-24 bg-white rounded-[3rem] border border-dashed border-natural-line group">
+                         <div className="w-20 h-20 bg-natural-surface rounded-full flex items-center justify-center mx-auto mb-6 group-hover:rotate-12 transition-transform"><Package className="w-10 h-10 text-natural-muted" /></div>
+                         <p className="font-black text-natural-heading text-xl mb-1">{t.nothingHere}</p>
+                         <p className="text-xs text-natural-muted font-bold uppercase tracking-widest leading-loose">{t.startFirst}</p>
+                       </div>
+                     )}
+                   </div>
+                  )}
               </>
             ) : (
               <div className="px-4 py-8 space-y-8 animate-in zoom-in-95 duration-300">
@@ -9748,6 +10759,242 @@ function MainApp() {
                     </button>
                   </div>
                 </div>
+              </motion.div>
+            </>
+          )}
+
+          {showOpenPedidoModal && (
+            <>
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => !creatingOpenPedido && setShowOpenPedidoModal(false)}
+                className="fixed inset-0 bg-natural-heading/70 backdrop-blur-xl z-[80]"
+              />
+              <motion.div
+                initial={{ y: '100%' }}
+                animate={{ y: 0 }}
+                exit={{ y: '100%' }}
+                transition={{ type: 'spring', damping: 22, stiffness: 170 }}
+                className="fixed bottom-0 left-0 right-0 bg-natural-bg rounded-t-[3rem] z-[90] px-6 pt-7 pb-10 shadow-2xl max-w-md mx-auto overflow-y-auto max-h-[92vh]"
+              >
+                <div className="flex items-center justify-between mb-5">
+                  <div>
+                    <span className="text-[9px] font-black uppercase tracking-widest text-natural-accent">
+                      Novo Pedido Mozbiscates
+                    </span>
+                    <h3 className="text-2xl font-black text-natural-heading tracking-tight">
+                      Publicar Pedido
+                    </h3>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={creatingOpenPedido}
+                    onClick={() => setShowOpenPedidoModal(false)}
+                    className="w-10 h-10 rounded-full bg-white border border-natural-line flex items-center justify-center text-natural-muted hover:text-natural-heading active:scale-90 transition-all"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <form onSubmit={handleCreateOpenPedido} className="space-y-4">
+                  {/* Destino do Pedido */}
+                  <div>
+                    <label className="text-[9px] font-black text-natural-muted uppercase ml-2 mb-1.5 block tracking-wider">
+                      Quem pode aceitar este pedido?
+                    </label>
+                    <div className="grid grid-cols-2 gap-2 bg-white p-1.5 rounded-2xl border-2 border-natural-line">
+                      <button
+                        type="button"
+                        onClick={() => setOpenPedidoTarget('open')}
+                        className={`py-3 px-2 rounded-xl text-[10px] font-black uppercase tracking-wide transition-all ${
+                          openPedidoTarget === 'open'
+                            ? 'bg-emerald-600 text-white shadow-md'
+                            : 'text-natural-muted hover:bg-natural-surface'
+                        }`}
+                      >
+                        📢 Pedido Aberto
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOpenPedidoTarget('demo_worker')}
+                        className={`py-3 px-2 rounded-xl text-[10px] font-black uppercase tracking-wide transition-all ${
+                          openPedidoTarget === 'demo_worker'
+                            ? 'bg-natural-accent text-white shadow-md'
+                            : 'text-natural-muted hover:bg-natural-surface'
+                        }`}
+                      >
+                        🔧 Biscateiro Demo
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-natural-muted font-semibold mt-1.5 px-2">
+                      {openPedidoTarget === 'open'
+                        ? 'Fica visível em "Pedidos Abertos Disponíveis" para o Biscateiro aceitar com 1 clique.'
+                        : 'Envia directamente para Panda Vlogs (Biscateiro Demo) aceitar e continuar o fluxo.'}
+                    </p>
+                  </div>
+
+                  {/* Categoria */}
+                  <div>
+                    <label className="text-[9px] font-black text-natural-muted uppercase ml-2 mb-1.5 block tracking-wider">
+                      Categoria do Serviço
+                    </label>
+                    <select
+                      value={openPedidoCategory}
+                      onChange={(e) => setOpenPedidoCategory(e.target.value)}
+                      className="w-full p-4 bg-white border-2 border-natural-line rounded-2xl outline-none font-bold text-sm text-natural-heading focus:border-natural-accent transition-colors"
+                    >
+                      {categories.map((c) => (
+                        <option key={c.label} value={c.label}>
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Bairro */}
+                  <div>
+                    <label className="text-[9px] font-black text-natural-muted uppercase ml-2 mb-1.5 block tracking-wider">
+                      Bairro / Localização
+                    </label>
+                    <input
+                      type="text"
+                      list="open-pedido-bairros"
+                      value={openPedidoBairro}
+                      onChange={(e) => setOpenPedidoBairro(e.target.value)}
+                      placeholder="Ex: Polana Cimento, Sommerschield..."
+                      className="w-full p-4 bg-white border-2 border-natural-line rounded-2xl outline-none font-bold text-sm text-natural-heading focus:border-natural-accent transition-colors"
+                    />
+                    <datalist id="open-pedido-bairros">
+                      {BAIRROS_LIST.map((b) => (
+                        <option key={b} value={b} />
+                      ))}
+                    </datalist>
+                  </div>
+
+                  {/* Valor em MT */}
+                  <div>
+                    <label className="text-[9px] font-black text-natural-muted uppercase ml-2 mb-1.5 block tracking-wider">
+                      Valor Proposto (MT)
+                    </label>
+                    <div className="flex gap-2 mb-2">
+                      {['250', '500', '1000', '2000'].map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => setOpenPedidoAmount(preset)}
+                          className={`flex-1 py-2 rounded-xl text-[10px] font-black border-2 transition-all ${
+                            openPedidoAmount === preset
+                              ? 'bg-natural-accent border-natural-accent text-white shadow-sm'
+                              : 'bg-white border-natural-line text-natural-heading hover:border-natural-accent/50'
+                          }`}
+                        >
+                          {preset} MT
+                        </button>
+                      ))}
+                    </div>
+                    <input
+                      type="number"
+                      min={50}
+                      max={500000}
+                      required
+                      value={openPedidoAmount}
+                      onChange={(e) => setOpenPedidoAmount(e.target.value)}
+                      className="w-full p-4 bg-white border-2 border-natural-line rounded-2xl outline-none font-black text-base text-natural-heading focus:border-natural-accent transition-colors"
+                    />
+                  </div>
+
+                  {/* Modalidade */}
+                  <div>
+                    <label className="text-[9px] font-black text-natural-muted uppercase ml-2 mb-1.5 block tracking-wider">
+                      {t.scheduleType || 'Modalidade'}
+                    </label>
+                    <div className="flex bg-white p-1 rounded-2xl border-2 border-natural-line gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setOpenPedidoType('immediate')}
+                        className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${
+                          openPedidoType === 'immediate' ? 'bg-natural-accent text-white' : 'text-natural-muted'
+                        }`}
+                      >
+                        {t.immediate || 'Imediato'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOpenPedidoType('scheduled')}
+                        className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${
+                          openPedidoType === 'scheduled' ? 'bg-natural-accent text-white' : 'text-natural-muted'
+                        }`}
+                      >
+                        {t.scheduled || 'Agendado'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {openPedidoType === 'scheduled' && (
+                    <div>
+                      <label className="text-[9px] font-black text-natural-muted uppercase ml-2 mb-1 block tracking-wider">
+                        {t.scheduleDate || 'Data & Hora'}
+                      </label>
+                      <input
+                        type="datetime-local"
+                        value={openPedidoDateTime}
+                        onChange={(e) => setOpenPedidoDateTime(e.target.value)}
+                        min={new Date().toISOString().slice(0, 16)}
+                        className="w-full p-4 bg-white border-2 border-natural-line rounded-2xl outline-none font-bold text-natural-heading focus:border-natural-accent transition-colors"
+                      />
+                    </div>
+                  )}
+
+                  {/* Descrição */}
+                  <div>
+                    <label className="text-[9px] font-black text-natural-muted uppercase ml-2 mb-1.5 block tracking-wider">
+                      Descrição do Trabalho
+                    </label>
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {[
+                        'Trocar tomada e verificar disjuntor da sala',
+                        'Reparar fuga de água na torneira da cozinha',
+                        'Limpeza geral e organização do apartamento'
+                      ].map((sample) => (
+                        <button
+                          key={sample}
+                          type="button"
+                          onClick={() => setOpenPedidoDesc(sample)}
+                          className="px-2.5 py-1 rounded-xl bg-white border border-natural-line text-[9px] font-bold text-natural-muted hover:border-natural-accent hover:text-natural-heading transition-colors text-left"
+                        >
+                          + {sample}
+                        </button>
+                      ))}
+                    </div>
+                    <textarea
+                      rows={3}
+                      value={openPedidoDesc}
+                      onChange={(e) => setOpenPedidoDesc(e.target.value)}
+                      placeholder="Descreva o serviço que precisa..."
+                      className="w-full p-4 bg-white border-2 border-natural-line rounded-2xl outline-none text-sm font-medium text-natural-heading focus:border-natural-accent resize-none"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={creatingOpenPedido}
+                    className="w-full bg-natural-accent hover:bg-orange-600 text-white font-black py-4 rounded-2xl shadow-xl shadow-natural-accent/30 uppercase tracking-widest text-xs flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-60"
+                  >
+                    {creatingOpenPedido ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>A Publicar...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Zap className="w-4 h-4" />
+                        <span>Publicar Pedido Agora</span>
+                      </>
+                    )}
+                  </button>
+                </form>
               </motion.div>
             </>
           )}

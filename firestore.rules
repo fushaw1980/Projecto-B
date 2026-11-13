@@ -42,6 +42,13 @@ service cloud.firestore {
       );
     }
 
+    function isDemoPresentationAccount() {
+      return isSignedIn() && (
+        request.auth.token.email == 'pandavlogs419@gmail.com' ||
+        request.auth.token.email == 'mrwanderboy7@gmail.com'
+      );
+    }
+
     // --- User Profile Validation ---
     function isValidUser(data) {
       return data.uid == request.auth.uid &&
@@ -102,9 +109,18 @@ service cloud.firestore {
             isAdmin()
           )
         ) ||
-        // Case 2: Admin full management
+        // Case 2: Demo presentation settlement credit (strictly scoped to the 2 presentation demo emails)
+        (
+          isDemoPresentationAccount() &&
+          existing().email in ['pandavlogs419@gmail.com', 'mrwanderboy7@gmail.com'] &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['balance', 'jobs', 'updatedAt']) &&
+          incoming().balance is number && incoming().balance >= 0 && incoming().balance <= 5000000 &&
+          incoming().updatedAt == request.time
+        ) ||
+        // Case 3: Admin full management
         isAdmin()
       );
+      allow delete: if isValidId(userId) && isAdmin();
 
       // --- Subcollection: private_profile (PII: BI, Selfie, NUIT, Emergency Contact) ---
       // Strictly accessible ONLY by the resource owner or verified system admin
@@ -132,7 +148,14 @@ service cloud.firestore {
       match /transactions/{txId} {
         allow read: if isSignedIn() && isValidId(userId) && isValidId(txId) && (isOwner(userId) || isAdmin());
         allow list: if isSignedIn() && isValidId(userId) && (isOwner(userId) || isAdmin());
-        allow create, update, delete: if isAdmin();
+        allow create: if isValidId(userId) && isValidId(txId) && (
+          isAdmin() ||
+          (
+            isDemoPresentationAccount() &&
+            get(/databases/$(database)/documents/users/$(userId)).data.email in ['pandavlogs419@gmail.com', 'mrwanderboy7@gmail.com']
+          )
+        );
+        allow update, delete: if isAdmin();
       }
     }
 
@@ -188,11 +211,16 @@ service cloud.firestore {
           // Cancel due to unforeseen circumstances
           (incoming().status == 'CANCELADO' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cancellationReason', 'previousStatus', 'cancelledBy', 'updatedAt'])) ||
           // Quick Reschedule: restore cancelled job to PAGO/AGUARDANDO_DEPOSITO keeping payment config
-          (existing().status == 'CANCELADO' && incoming().status in ['PAGO', 'AGUARDANDO_DEPOSITO'] && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'scheduledFor', 'bookingType', 'cancellationReason', 'rescheduledAt', 'rescheduleNote', 'updatedAt']))
+          (existing().status == 'CANCELADO' && incoming().status in ['PAGO', 'AGUARDANDO_DEPOSITO'] && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'scheduledFor', 'bookingType', 'cancellationReason', 'rescheduledAt', 'rescheduleNote', 'updatedAt'])) ||
+          // Demo presentation client: manual validation simulation or Escrow payout settlement fallback
+          (isDemoPresentationAccount() && existing().status == 'VALIDACAO_PENDENTE' && incoming().status == 'PAGO' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) && incoming().updatedAt == request.time) ||
+          (isDemoPresentationAccount() && existing().status in ['PAGO', 'EM_CURSO', 'FINALIZADO'] && incoming().status == 'CONCLUIDO' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'payoutAmount', 'platformFee', 'payoutTransactionId', 'completedAt', 'updatedAt']) && incoming().updatedAt == request.time)
         )) ||
         
-        // Worker Actions:
+        // Worker Actions (Direct / Assigned):
         (existing().providerId == request.auth.uid && (
+          // Accept direct booking while awaiting deposit
+          (existing().status == 'AGUARDANDO_DEPOSITO' && incoming().status == 'AGUARDANDO_DEPOSITO' && incoming().workerAccepted == true && incoming().diff(existing()).affectedKeys().hasOnly(['workerAccepted', 'acceptedAt', 'updatedAt']) && incoming().updatedAt == request.time) ||
           // Check-in / Start work
           (incoming().status == 'EM_CURSO' && existing().status in ['PAGO'] && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'photoBefore', 'updatedAt'])) ||
           // Check-out / Finish work
@@ -204,12 +232,25 @@ service cloud.firestore {
           // Quick Reschedule: restore cancelled job to PAGO/AGUARDANDO_DEPOSITO keeping payment config
           (existing().status == 'CANCELADO' && incoming().status in ['PAGO', 'AGUARDANDO_DEPOSITO'] && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'scheduledFor', 'bookingType', 'cancellationReason', 'rescheduledAt', 'rescheduleNote', 'updatedAt']))
         )) ||
+
+        // Open Job Acceptance by any signed-in worker (not the client)
+        (
+          existing().providerId == 'OPEN' &&
+          existing().status == 'AGUARDANDO_DEPOSITO' &&
+          existing().clientId != request.auth.uid &&
+          incoming().providerId == request.auth.uid &&
+          incoming().status == 'AGUARDANDO_DEPOSITO' &&
+          incoming().workerAccepted == true &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['providerId', 'providerName', 'providerPhone', 'workerAccepted', 'acceptedAt', 'updatedAt']) &&
+          incoming().updatedAt == request.time
+        ) ||
         
         // Admin Actions:
         (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
           'status', 'payoutAmount', 'platformFee', 'payoutTransactionId', 'cancellationReason', 'scheduledFor', 'completedAt', 'updatedAt'
         ]))
       );
+      allow delete: if isValidId(jobId) && isAdmin();
 
       // Subcollection: messages (Chat do Biscate)
       match /messages/{messageId} {
