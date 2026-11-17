@@ -20,7 +20,6 @@ interface ClientSecurityProfileModalProps {
   onCancel?: () => void;
   isMandatory?: boolean;
   isManager?: boolean;
-  isDemoAccount?: boolean;
 }
 
 export const ClientSecurityProfileModal: React.FC<ClientSecurityProfileModalProps> = ({
@@ -28,10 +27,9 @@ export const ClientSecurityProfileModal: React.FC<ClientSecurityProfileModalProp
   onSave,
   onCancel,
   isMandatory = false,
-  isManager = false,
-  isDemoAccount = false
+  isManager = false
 }) => {
-  const biExempt = isManager || isDemoAccount;
+  const biExempt = isManager;
   const [fullName, setFullName] = useState(initialData?.fullName || '');
   const [phone, setPhone] = useState(initialData?.phone || '');
   const [bairro, setBairro] = useState(initialData?.bairro || 'Polana Caniço');
@@ -71,7 +69,7 @@ export const ClientSecurityProfileModal: React.FC<ClientSecurityProfileModalProp
       return;
     }
 
-    // BI é obrigatório para todos os utilizadores, excepto para os gerentes e contas demo de apresentação
+    // BI é obrigatório para todos os utilizadores, excepto para os gerentes
     if (!biExempt && !biPhoto) {
       setError('A foto do Bilhete de Identidade (BI) é obrigatória para segurança e validação da conta (dispensada apenas para gerentes).');
       return;
@@ -149,7 +147,7 @@ export const ClientSecurityProfileModal: React.FC<ClientSecurityProfileModalProp
               <span className="text-[9px] text-natural-muted text-center mt-0.5">Rosto nítido (opcional)</span>
             </div>
 
-            {/* Foto do BI (Obrigatória para todos, excepto gerentes/demo) */}
+            {/* Foto do BI (Obrigatória para todos, excepto gerentes) */}
             <div className={`flex flex-col items-center p-3.5 rounded-2xl ${biExempt ? 'bg-emerald-50/60 border border-emerald-200' : 'bg-amber-50/60 border border-amber-200'}`}>
               <label className="relative cursor-pointer group w-full">
                 <div className={`w-full h-20 rounded-xl bg-white border-2 border-dashed overflow-hidden flex flex-col items-center justify-center relative ${biExempt ? 'border-emerald-300' : 'border-amber-300'}`}>
@@ -174,7 +172,7 @@ export const ClientSecurityProfileModal: React.FC<ClientSecurityProfileModalProp
                 Bilhete de Identidade (BI)
               </span>
               <span className={`text-[9px] text-center mt-0.5 ${biExempt ? 'text-emerald-700 font-semibold' : 'text-amber-700'}`}>
-                {isDemoAccount ? 'Dispensado para Conta Demo (Apresentação)' : isManager ? 'Dispensado para Gerentes (Opcional)' : 'Obrigatório: Foto nítida da frente do BI/DIRE'}
+                {isManager ? 'Dispensado para Gerentes (Opcional)' : 'Obrigatório: Foto nítida da frente do BI/DIRE'}
               </span>
             </div>
           </div>

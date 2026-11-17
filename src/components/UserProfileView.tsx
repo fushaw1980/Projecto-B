@@ -57,7 +57,6 @@ interface UserProfileViewProps {
   userData: any;
   role: 'client' | 'worker' | 'admin' | null;
   isManager: boolean;
-  isDemoAccount?: boolean;
   balance: number;
   jobsCount: number;
   lang: 'pt' | 'en' | 'em';
@@ -87,7 +86,6 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
   userData,
   role,
   isManager,
-  isDemoAccount = false,
   balance,
   jobsCount,
   lang,
@@ -97,7 +95,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
   onSwitchRole,
   onLogout
 }) => {
-  const biExempt = isManager || isDemoAccount;
+  const biExempt = isManager;
   const [isEditing, setIsEditing] = useState(false);
   const [showPrivateDocs, setShowPrivateDocs] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -266,13 +264,9 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
     ? userData?.biPhoto
       ? 'BI Registado · Gerência'
       : 'Dispensado (Gerência)'
-    : isDemoAccount
-      ? userData?.biPhoto
-        ? 'BI Registado · Conta Demo'
-        : 'Dispensado (Conta Demo)'
-      : userData?.biPhoto
-        ? 'BI Verificado'
-        : 'BI Pendente (Obrigatório)';
+    : userData?.biPhoto
+      ? 'BI Verificado'
+      : 'BI Pendente (Obrigatório)';
 
   return (
     <main className="flex-1 px-5 pt-4 pb-32 space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-300">
@@ -375,7 +369,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
               </div>
               <div className="text-center">
                 <p className={`text-sm font-black ${userData?.biPhoto || biExempt ? 'text-emerald-700' : 'text-amber-700'}`}>
-                  {isManager ? 'Gerente' : isDemoAccount ? 'Conta Demo' : userData?.biPhoto ? 'Auditado' : 'Em falta'}
+                  {isManager ? 'Gerente' : userData?.biPhoto ? 'Auditado' : 'Em falta'}
                 </p>
                 <p className="text-[10px] font-bold text-natural-muted uppercase tracking-wider mt-0.5">
                   Segurança
@@ -709,7 +703,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
             <div className="flex items-center justify-between text-xs">
               <span className="font-bold text-natural-heading">Bilhete de Identidade (BI)</span>
               <span className={`font-bold ${biExempt || biPhoto ? 'text-emerald-700' : 'text-amber-700'}`}>
-                {isManager ? 'Dispensado para Gerência' : isDemoAccount ? 'Dispensado para Conta Demo' : biPhoto ? 'Carregado' : 'Obrigatório'}
+                {isManager ? 'Dispensado para Gerência' : biPhoto ? 'Carregado' : 'Obrigatório'}
               </span>
             </div>
 
@@ -740,7 +734,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
                     <img src={biPhoto} alt="Bilhete de Identidade" className="w-full h-32 object-cover rounded-2xl border border-natural-line" />
                   ) : (
                     <div className="h-24 bg-natural-surface rounded-2xl border border-natural-line flex items-center justify-center text-xs text-natural-muted font-semibold">
-                      {isManager ? 'Dispensado para Gerência' : isDemoAccount ? 'Dispensado para Conta Demo' : 'BI ainda não enviado'}
+                      {isManager ? 'Dispensado para Gerência' : 'BI ainda não enviado'}
                     </div>
                   )}
                 </div>

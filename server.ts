@@ -335,25 +335,6 @@ async function startServer() {
       if (err.message === "INVALID_AMOUNT") {
         return res.status(400).json({ error: "Valor de remuneração inválido para liquidação." });
       }
-      const callerEmail = (callerUser.email || '').toLowerCase();
-      const isDemoOrAdmin =
-        callerEmail === 'pandavlogs419@gmail.com' ||
-        callerEmail === 'mrwanderboy7@gmail.com' ||
-        ['fushawshaw@gmail.com', 'wanderj419@gmail.com', 'mozbiscates@gmail.com'].includes(callerEmail);
-      const errMsg = String(err?.message || '');
-      if (
-        isDemoOrAdmin &&
-        (err?.code === 7 ||
-          errMsg.includes('PERMISSION_DENIED') ||
-          errMsg.includes('insufficient permissions') ||
-          errMsg.includes('Could not load the default credentials'))
-      ) {
-        return res.json({
-          status: "demo_fallback",
-          demoFallback: true,
-          message: "Liquidação processada em modo demonstração."
-        });
-      }
       console.error("Payout error:", err.message);
       return res.status(500).json({ error: "Erro no processamento da liquidação no servidor." });
     }
